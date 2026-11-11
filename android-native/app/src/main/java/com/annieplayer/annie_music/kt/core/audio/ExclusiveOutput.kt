@@ -113,8 +113,13 @@ internal class ExclusiveOutput(
     private var readBaseFrames = 0L
     private var lastReadFrames = 0L
     private var lastConsumeMs = 0L
-    @Volatile private var outputStreamOffsetUs = 0L
     @Volatile private var startMediaTimeUs = C.TIME_UNSET
+
+    /** 时间轴不连续：下一次写入时把基点重设到那一块（数据照播，不清环） */
+    private var timeBaseNeedsSync = false
+
+    /** 基点刚重设过：允许位置**退一步**（Media3 那边同时会收到 `onPositionDiscontinuity`） */
+    private var allowPositionBackwards = false
     private var playbackThreadBoosted = false
 
     /** 上一次上报的通路 / 降级原因（只在变化时推，避免每首歌都推一次状态） */
@@ -126,9 +131,17 @@ internal class ExclusiveOutput(
     /** 上游是否想播（sink 自己的 `playRequested`，全局只有这一份） */
     val wantsPlay: Boolean get() = playRequested
 
-    /** `AudioSink.setOutputStreamOffsetUs`：位置零点要把它加回去 */
-    fun setOutputStreamOffsetUs(offsetUs: Long) {
-        outputStreamOffsetUs = offsetUs
+    /**
+     * **还有多少微秒的音频没播出去**（环里 + 在飞之外的部分）。
+     *
+     * 只给界面用：换曲时 `configure()` 会先把上一首的尾巴播完（约 2 s），这段时间播放线程被占住，
+     * `ExoPlayer.getCurrentPosition()` 不刷新。进度侧只要这一个数就能判断"已经进到尾段"，
+     * 不必去猜 PTS 与 offset 的换算（那条路依赖 Media3 两个不同步的值，反复出错）。
+     */
+    fun pendingUs(): Long {
+        if (handle == 0L) return 0L
+        val left = (writtenFramesByUs - playedFramesNow()).coerceAtLeast(0L)
+        return framesToUs(left)
     }
 
     /** 当前这条流是否还活着；`false` = 只有拆流重建能救（`dead` 只在 startStream 清） */
@@ -145,6 +158,11 @@ internal class ExclusiveOutput(
         val wantRaw = req.rawAlt
         openedTransportTag = req.transportTag
         streamRawFrames = req.rawFrames
+
+        // **三条 configure 分支都会清掉环**（复用 flush / 换率 reopen / 重开会话），
+        // 所以上一首的尾巴必须先在这里播完 —— 实测切歌瞬间残留 2.25 s，
+        // 直接清掉就是"最后几秒没声"。seek 不走这里（走 `flush()`，那里照旧丢）。
+        drainPending()
 
         // 死流不许复用：一直抱着它会让**连普通 PCM 也一起哑**，直到某次走"新会话"
         if (handle != 0L && !engine.isHealthy(handle)) {
@@ -506,6 +524,18 @@ internal class ExclusiveOutput(
             return false
         }
 
+        if (timeBaseNeedsSync) {
+            timeBaseNeedsSync = false
+            // 基点重设到这一块，并把"已播"的基准同步到此刻：位置从新时间轴起算，不混旧账。
+            // **不动环里的数据** —— 不连续只说明时间戳跳了，音频还要照播完。
+            startMediaTimeUs = presentationTimeUs
+            writtenFramesByUs = 0L
+            timestampBaseFrames = engine.timestamp(handle)?.get(0) ?: 0L
+            readBaseFrames = engine.framesRead(handle)
+            allowPositionBackwards = true
+            listenerProvider()?.let { runCatching { it.onPositionDiscontinuity() } }
+        }
+
         buffer.position(buffer.position() + frames * bytesPerFrame)
         writtenFramesByUs += frames
         if (startMediaTimeUs == C.TIME_UNSET) {
@@ -526,8 +556,12 @@ internal class ExclusiveOutput(
             return C.TIME_UNSET
         }
         val playedFrames = minOf(playedFramesNow(), writtenFramesByUs)
+        // 零点每次现算；帧数这一项自带上限，两项相加不会到荒谬量级
         val us = startTimeBasis() + framesToUs(playedFrames)
-        if (us > positionUs) positionUs = us
+        if (us > positionUs || allowPositionBackwards) {
+            positionUs = us
+            allowPositionBackwards = false
+        }
         val now = android.os.SystemClock.elapsedRealtime()
         if (now - lastStatsMs > 500) {
             lastStatsMs = now
@@ -540,16 +574,17 @@ internal class ExclusiveOutput(
         return positionUs
     }
 
-    private fun framesToUs(frames: Long): Long =
-        if (sampleRate > 0) frames * 1_000_000L / sampleRate else 0L
+    private fun framesToUs(frames: Long): Long = ExclusiveClock.framesToUs(frames, sampleRate)
 
     /**
-     * 位置零点（媒体时间轴）。`startMediaTimeUs` 是 `write` 给的 PTS，是否已含 offset 随源而定，
-     * 所以按"PTS 明显小于 offset 就补上"处理。
-     * ⚠️ 别改成"减去"：那会让位置小于 startPositionUs ⇒ periodPositionUs 变负 ⇒ 进度条钉在原点。
+     * 位置零点 = 本段首块数据的媒体时间戳，**不加任何 offset**。
+     *
+     * `setOutputStreamOffsetUs` 只是 Media3 内部时间轴的记账：参考实现 `DefaultAudioSink` 里
+     * 压根没有这个方法的实现（接口默认空实现），它的时钟走 `applyMediaPositionParameters`，
+     * 用缓冲区时间戳 + 已播时长。sink 一旦自己把 offset 加进去，Media3 再按自己的时间轴
+     * 减一次，就是整整 ±1×10^12 µs（界面 `16673:31` 或卡 `0:00`，两次都实测过）。
      */
-    private fun startTimeBasis(): Long =
-        startMediaTimeUs + if (startMediaTimeUs < outputStreamOffsetUs) outputStreamOffsetUs else 0L
+    private fun startTimeBasis(): Long = startMediaTimeUs
 
     /** 设备真的播出去多少帧：硬件时间戳优先，退回 `framesRead`（静音填充不计） */
     private fun playedFramesNow(): Long {
@@ -576,6 +611,18 @@ internal class ExclusiveOutput(
         playRequested = false
         stalePauseBuffers = 0
         if (handle != 0L) engine.pause(handle)
+    }
+
+    /**
+     * 时间戳跳了（不是 seek）：记下"下一次写入时重设基点"，**一个字节都不丢**。
+     *
+     * 以前这里直接走 `flush()`，等于把环里没播完的尾巴扔掉 —— 听感就是"三分十四秒的歌
+     * 三分十二秒就换下一首"，同时位置被归零，界面时钟退一步再爬。
+     * 参考实现（`DefaultAudioSink.handleDiscontinuity`）也只置一个同步标志。
+     */
+    override fun onTimelineDiscontinuity() {
+        if (handle == 0L) return
+        timeBaseNeedsSync = true
     }
 
     override fun flush(playRequested: Boolean) {
@@ -625,8 +672,10 @@ internal class ExclusiveOutput(
         failureReported = false
         handledEndOfStream = false
         writtenFramesByUs = 0L
-        timestampBaseFrames = 0L
-        readBaseFrames = 0L
+        // 基准取**当前读数**，不是 0：native 侧的计数器在 flush 之后并不归零（见 `nativeFlush`），
+        // 置 0 等于把"这条流从开到现在的累计帧数"当成本首已播帧。
+        timestampBaseFrames = engine.timestamp(handle)?.get(0) ?: 0L
+        readBaseFrames = engine.framesRead(handle)
         startMediaTimeUs = C.TIME_UNSET
     }
 
@@ -637,8 +686,58 @@ internal class ExclusiveOutput(
         engine.release()
     }
 
+    /**
+     * 输入结束：**阻塞到已交给本 sink 的数据全部写出去**（照 Media3 的约定；参考实现走
+     * `AudioTrack.playToEndOfStream()` 的 drain）。
+     *
+     * 不阻塞的代价是实测过的：Media3 立刻认为这本放完 → `_setSource()` 换下一首 →
+     * 新流的 `configure()` 清环，环里还没播完的那段就永远没了（听感=最后几秒没声）。
+     *
+     * 等的预算必须按**环的真实容量**算，不能给固定值：`ringCapacityBytes` 里
+     * `perSecond/4` 那一项是按管子的最大承载率取的，alt 3 下环能到 2~3 s ——
+     * 固定 2 s 会在快到点的时候放弃，尾巴照样丢。
+     *
+     * 暂停时不排（用户按了暂停，环里剩的就是剩的）；流没了立即退出。
+     */
     override fun playToEndOfStream() {
+        val deadline = android.os.SystemClock.elapsedRealtime() + drainBudgetMs()
+        while (handle != 0L && playRequested && hasPendingData()) {
+            if (android.os.SystemClock.elapsedRealtime() >= deadline) break
+            Thread.sleep(2L)
+        }
         handledEndOfStream = true
+    }
+
+    /**
+     * 把环里剩下的数据播完（**换曲**专用，`seek` 不许调用）。
+     *
+     * Media3 换下一首时会先 `configure()`，那一刻环里通常还压着上一首的尾巴
+     * （实测 2.25 s）—— 直接 `engine.flush()` 就把它扔了，听感=歌少了几秒。
+     * 这里按残留长度给预算，播完就返回；暂停中不排（用户按了暂停，剩的就是剩的）。
+     */
+    private fun drainPending() {
+        if (handle == 0L || !playRequested || sampleRate <= 0) return
+        var left = writtenFramesByUs - playedFramesNow()
+        if (framesToUs(left.coerceAtLeast(0L)) < 50_000L) return
+        val deadline = android.os.SystemClock.elapsedRealtime() +
+            (left.coerceAtLeast(0L) * 1000L / sampleRate) + 500L
+        while (handle != 0L && playRequested) {
+            left = writtenFramesByUs - playedFramesNow()
+            if (left <= 0L) break
+            if (android.os.SystemClock.elapsedRealtime() >= deadline) break
+            Thread.sleep(2L)
+        }
+    }
+
+    /** 环深 + 1 s 余量（上限 10 s：真停了就别再等） */
+    private fun drainBudgetMs(): Long {
+        val ringFrames = if (handle != 0L && engine !== OboeEngine) {
+            NativeUacStream.ringCapacityFrames(handle).toLong()
+        } else {
+            0L
+        }
+        val ringMs = if (sampleRate > 0) ringFrames * 1000L / sampleRate else 0L
+        return (ringMs + 1_000L).coerceAtMost(10_000L)
     }
 
     override fun isEnded(): Boolean {
@@ -647,15 +746,19 @@ internal class ExclusiveOutput(
     }
 
     /**
-     * 还有没有没播出去的数据 = 已写帧 > 已播帧。
+     * 还有没有**没出声**的数据 = 已写帧 > 已播帧 + 在飞。
      *
-     * 这个判据两头都不能歪：恒 true 会让播放器永远停在 READY、判不出播完；
-     * 过于乐观地报 false 会掉进 BUFFERING 把 renderer 停掉。
+     * `framesRead` 算的是"读进 URB"，比真正出声早一个 pipe 的水深（[IN_FLIGHT_MS]），
+     * 所以必须扣掉：不扣的话 `isEnded` 早了 63 ms 起，Media3 就会带着没播完的数据换曲。
+     * 反过来这个判据也不能恒 true —— 那会让播放器永远判不出播完。
      */
     override fun hasPendingData(): Boolean {
         if (handle == 0L) return false
-        return writtenFramesByUs > playedFramesNow()
+        return writtenFramesByUs > playedFramesNow() + inFlightFrames()
     }
+
+    private fun inFlightFrames(): Long =
+        if (sampleRate > 0) sampleRate.toLong() * IN_FLIGHT_MS / 1000L else 0L
 
     // ── 内部 ──
 
@@ -810,5 +913,14 @@ internal class ExclusiveOutput(
     private companion object {
         /** 写不进去 + 设备读不走持续这么久就判这条流已废（正常背压最长几百毫秒） */
         const val STALL_TIMEOUT_MS = 3_000L
+
+        /**
+         * 在飞水深：`kUrbCount(21) × kPacketsPerUrb(24)` 个微帧 = 63 ms。
+         *
+         * 这段时间的数据已经提交给主机控制器、还没从 DAC 出声，`framesRead` 却已经算进去了。
+         * 所以判"还有没有没播完的数据"时必须把它扣掉 —— 否则 `isEnded` 会早于真实出声，
+         * Media3 提前换曲、我们 configure 时清环，尾巴就没了。
+         */
+        const val IN_FLIGHT_MS = 63L
     }
 }
