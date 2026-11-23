@@ -1,0 +1,34 @@
+# 操作系统与 IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+
+# Gradle / Android 构建与本地状态
+.gradle/
+local.properties
+build/
+*/build/
+.cxx/
+.externalNativeBuild/
+captures/
+.navigation/
+*.hprof
+
+# 编译和交付产物
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# 签名材料与本地环境（不得进入 Git 或通过 QQ 传输）
+*.keystore
+*.jks
+*.key
+*.pem
+.env
+.env.*
+!.env.example
+
+# 大二进制不得提交；构建交付使用 Actions Artifact 或 Release 资产
