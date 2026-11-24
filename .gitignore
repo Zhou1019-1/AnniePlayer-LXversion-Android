@@ -34,16 +34,6 @@ android-native/local.properties
 android-native/.cxx/
 android-native/app/.cxx/
 
-# wrapper-lite-app（QEMU 包装器）整个目录不进本仓库
-# 它有自己的仓库：android-native/wrapper-lite-app/.git，独立提交、独立 remote。
-# 本目录只当本地工作副本用，不能再被外层 git 跟踪（嵌套 .git 会让外层看到
-# 一个 embedded repository，只留一个 160000 的空条目，等于什么都没记录）。
-#
-# 那些必须入库的资产（guest 资产 / 84 个 aarch64 依赖库 / qemu-fw /
-# libqemu_x86_64.so / assets-src/data.empty.img）现在由内层仓库自己管，
-# 内层的 .gitignore 只忽略 build 产物。
-android-native/wrapper-lite-app/
-
 # LunaBeat 反编译参考（纯本地对照用，整个目录不进版本库）
 #   lunabeat_src    jadx 产物，约 2.6 万文件 / 210 MB
 #   lunabeat_smali  apktool 产物，约 3.1 万文件 / 527 MB

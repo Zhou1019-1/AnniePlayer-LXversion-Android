@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  自适应图标前景层：白色音符。
+
+  几何与 `ui/Screens.kt` 的 `AppleMusicMark()` 完全一致（音符框 = 方块边长的 0.52、
+  描边 0.12、椭圆符头、二次贝塞尔符尾），只是把 0..1 的归一化坐标映射到 108x108
+  视口中央 36..72 的可视安全区里，这样各厂商的遮罩（圆形/方形/水滴）都不会切到音符。
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 符干 -->
+    <path
+        android:pathData="M58.32,38.88 L58.32,60.48"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.32"
+        android:strokeLineCap="round" />
+
+    <!-- 符尾 -->
+    <path
+        android:pathData="M58.32,38.88 Q69.12,43.2 61.92,51.12"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="4.32"
+        android:strokeLineCap="round" />
+
+    <!-- 符头 -->
+    <path
+        android:pathData="M42.48,63 a8.28,6.12 0 1,0 16.56,0 a8.28,6.12 0 1,0 -16.56,0 z"
+        android:fillColor="#FFFFFF" />
+</vector>
