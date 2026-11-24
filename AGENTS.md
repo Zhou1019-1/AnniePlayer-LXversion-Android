@@ -89,39 +89,4 @@
   `powershell -ExecutionPolicy Bypass -File android-native\native\temari\build-android.ps1`
   （源码在 `android-native/native/temari/`，脚本会重编并落盘到 `app/src/main/jniLibs/arm64-v8a/`）。
 
----
 
-## 99. 临时提醒（**commit 后删掉本节**）
-
-> 本节是唯一一次性的内容，和文件头「本文件只放规则」冲突，所以提交完立刻删除。
-
-`android-native/app/src/main/jniLibs/arm64-v8a/` 下这批由 `native/ffmpeg/` 自编 / 抽取的 so
-**还没有进 git**（`git status` 里是 `??`），合计约 6.29 MB：
-
-```
-libavcodec.so   libavformat.so   libavutil.so    libswresample.so
-libavfilter.so  libswscale.so    libavdevice.so
-libffmpegkit.so libffmpegkit_abidetect.so       libc++_shared.so
-```
-
-它们和已入库的 `libtemari.so` / `libtaglib.so` 是**同一类东西：构建产物要入库**——
-`.gitignore` 里「ffmpeg 自编」那段写明了理由：带上这几个 so，克隆下来直接
-`assembleRelease` 就能出包，不需要 WSL + Linux NDK + 10 分钟交叉编译。
-
-`libffmpegkit*.so` / `libc++_shared.so` 是从 AAR 抽出来的第三方二进制（LGPL），
-许可证文本已随 `res/raw/license_*.txt` 一起入库，再分发没问题。
-
-**所以下次用户说「提交」时，先把这批 so 摆出来问一句，别擅自 add：**
-
-> 这批自编 / 抽取的 so 要不要一起提交？（10 个，约 6.29 MB）
-> `libavcodec.so` `libavformat.so` `libavutil.so` `libswresample.so`
-> `libavfilter.so` `libswscale.so` `libavdevice.so`
-> `libffmpegkit.so` `libffmpegkit_abidetect.so` `libc++_shared.so`
-
-然后按用户的答复执行：
-
-- **说要** → `git add android-native/app/src/main/jniLibs/arm64-v8a/*.so`
-- **说不要** → 只提交代码改动，so 继续留在工作区当 `??`
-- **说只加一部分** → 只 `git add` 他点名的那些，别替他扩大范围
-
-无论加不加，**这次提交完成后删掉本节**。

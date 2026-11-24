@@ -50,21 +50,6 @@ _ref/
 # 跟着仓库走；`.git/info/exclude` 里那份保留，双保险。
 analysis/
 
-# ── ffmpeg 自编：源码与中间产物不进库，**产物要进** ─────────────────────────
-#
-#   native/ffmpeg/src/       ffmpeg 8.1.3 源码树（约 85 MB），由 fetch-source.ps1
-#                            下载 —— 属于**构建输入**，不是产物。
-#   native/ffmpeg/prefix*/   make install 的中间落点，随时可重生成。
-#
-# 反过来，这些**必须留在 git 里**（和 libtemari.so 同样的策略）：
-#   app/src/main/jniLibs/arm64-v8a/libffmpegkit{,_abidetect}.so
-#   app/src/main/jniLibs/arm64-v8a/libc++_shared.so
-#      上游 ffmpeg-kit 的 JNI 层，我们的脚本重建不出来；libc++ 还必须与它同一次工具链
-#      （`build.gradle.kts` 的 `pickFirsts` 就是为此）。
-#   native/ffmpeg/patches/   DSDIFF demuxer 等上游没有的补丁源码
-#
-# `libav*/libsw*.so` 是**我们自己的编译产物**，不入库：克隆后跑一次
-# `native/ffmpeg/build-android.sh`（WSL + Linux NDK，约 10 分钟）生成。
 android-native/native/ffmpeg/src/
 android-native/native/ffmpeg/prefix*/
 
