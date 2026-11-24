@@ -1,13 +1,9 @@
 package com.annieplayer.wrapperlite
 
 import android.Manifest
-import android.content.Intent
 import android.content.pm.PackageManager
-import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
-import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -52,6 +48,11 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        WrapperLite.reportBackgroundBlockIfAny(this)
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         // QEMU 由前台服务托管；这里只回收 UI
@@ -68,21 +69,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    /**
-     * 电池优化白名单：不设成「不限制」时，系统会冻结后台进程，
-     * QEMU 停摆 —— 端口还在监听但请求没有任何响应（表现为「检测服务失败」）。
-     *
-     * 系统对话框只会弹一次（拒绝后不再弹），所以 HomeScreen 上还留了「后台保活」按钮兜底。
-     */
     private fun ensureBatteryOptimization() {
-        runCatching {
-            val pm = getSystemService(PowerManager::class.java) ?: return
-            if (pm.isIgnoringBatteryOptimizations(packageName)) return
-            startActivity(
-                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                    data = Uri.parse("package:$packageName")
-                },
-            )
-        }
+        WrapperLite.handleStartupBackgroundCheck(this)
     }
 }

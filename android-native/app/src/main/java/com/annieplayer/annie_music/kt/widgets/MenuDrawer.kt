@@ -52,6 +52,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import com.annieplayer.annie_music.kt.R
+import com.annieplayer.annie_music.kt.core.platform.BackgroundState
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppDuration
 import com.annieplayer.annie_music.kt.ui.theme.AppEasing
@@ -98,7 +99,7 @@ fun MenuDrawer(
     storageGranted: Boolean?,
     onRequestStorage: () -> Unit,
     /** 是否已在「电池优化」白名单里；null = 检查中 */
-    batteryExempt: Boolean?,
+    battery: BackgroundState?,
     /** 参数 = 目标状态：true 申请加入白名单，false 跳系统设置页移除 */
     onToggleBattery: (Boolean) -> Unit,
     saveDirPath: String?,
@@ -194,12 +195,8 @@ fun MenuDrawer(
             )
             MenuDrawerSwitchRow(
                 label = "耗电优化",
-                subtitle = when (batteryExempt) {
-                    null -> "检查中..."
-                    true -> "已加入白名单（熄屏后不被冻结）"
-                    false -> "受系统限制，熄屏后可能被冻结"
-                },
-                checked = batteryExempt == true,
+                subtitle = battery?.describe() ?: "检查中...",
+                checked = battery?.dozeExempt == true,
                 onCheckedChange = onToggleBattery,
                 icon = { MenuDrawerBatteryIcon(tint = AppColors.glyphStrong) },
             )

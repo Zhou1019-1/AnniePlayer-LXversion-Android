@@ -1,81 +1,147 @@
 package com.annieplayer.annie_music.kt.core.platform
 
 import android.annotation.SuppressLint
+import android.app.AppOpsManager
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
 
-/**
- * 「耗电优化」白名单（Doze / 电池优化）的检测与引导。
- *
- * 为什么音乐播放器需要它：应用被系统放进「受限制」名单后，熄屏一段时间就会被冻结，
- * 后台自动切歌、下一首直链解析、下载任务都会停在半路（现象是「歌停在上一首结束处、
- * 前台点一下又正常」）。加入白名单后 `PARTIAL_WAKE_LOCK` 才真正管用。
- *
- * 和「所有文件访问」一样，这是**特殊权限**：不能弹运行时权限框，
- * 只能拉起系统的电池优化对话框（加入）或列表页（移出）。
- * 系统没有提供「以编程方式移出白名单」的接口，所以关闭开关只能跳设置页让用户自己取消。
- */
+fun isIgnoringBatteryOptimizations(context: Context): Boolean =
+    readDozeExempt(context) == true
 
-/** 当前是否已在「电池优化」白名单里（= 不受限制，后台不会被冻结） */
-fun isIgnoringBatteryOptimizations(context: Context): Boolean = runCatching {
-    val pm = context.getSystemService(Context.POWER_SERVICE) as PowerManager
-    pm.isIgnoringBatteryOptimizations(context.packageName)
-}.getOrDefault(false)
+fun readBackgroundState(context: Context): BackgroundState = BackgroundState(
+    dozeExempt = readDozeExempt(context),
+    standbyBucket = readStandbyBucket(context),
+    backgroundOpsAllowed = readBackgroundOps(context),
+    freeze = FreezeWatch.stats.value,
+    oemPanelRequired = oemFamily(),
+)
 
-/**
- * 申请加入电池优化白名单。
- *
- * 优先拉起系统自带的「是否允许后台运行」对话框（`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`，
- * 需要 Manifest 里的 `REQUEST_IGNORE_BATTERY_OPTIMIZATIONS`）；部分 ROM（含 Oppo/一加）
- * 没有这个对话框，退回电池优化列表页，再退回应用详情页。全程不抛异常。
- */
-@SuppressLint("BatteryLife")
-fun requestIgnoreBatteryOptimizations(context: Context) {
-    val pkg = context.packageName
-    val candidates = buildList {
-        add(
-            Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                data = Uri.fromParts("package", pkg, null)
-            },
-        )
-        add(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-        add(
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = Uri.fromParts("package", pkg, null)
-            },
-        )
-    }
-    startFirstAvailable(context, candidates)
+private fun readDozeExempt(context: Context): Boolean? {
+    val pm = context.getSystemService(Context.POWER_SERVICE) as? PowerManager ?: return null
+    return runCatching { pm.isIgnoringBatteryOptimizations(context.packageName) }.getOrNull()
 }
 
-/**
- * 打开电池优化列表页，让用户把本应用从白名单里移除。
- *
- * 系统没有反向接口（`ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS` 只能加不能减），
- * 所以关闭开关时只能把用户带到列表页。
- */
+private fun readStandbyBucket(context: Context): Int? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.P) return null
+    val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+        ?: return null
+    return runCatching { usm.appStandbyBucket }.getOrNull()
+}
+
+private const val OP_RUN_ANY_IN_BACKGROUND = "android:run_any_in_background"
+
+private fun readBackgroundOps(context: Context): Boolean? {
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return null
+    val ops = context.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager ?: return null
+    return runCatching {
+        val uid = context.applicationInfo.uid
+        val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            ops.unsafeCheckOpNoThrow(OP_RUN_ANY_IN_BACKGROUND, uid, context.packageName)
+        } else {
+            @Suppress("DEPRECATION")
+            ops.checkOpNoThrow(OP_RUN_ANY_IN_BACKGROUND, uid, context.packageName)
+        }
+        mode == AppOpsManager.MODE_ALLOWED || mode == AppOpsManager.MODE_DEFAULT
+    }.getOrNull()
+}
+
+@SuppressLint("BatteryLife")
+fun requestIgnoreBatteryOptimizations(context: Context) {
+    val wantDialog = !oemFamily() && readDozeExempt(context) == false
+    startFirstAvailable(context, settingsCandidates(context, wantDialog))
+}
+
 fun openBatteryOptimizationSettings(context: Context) {
-    val pkg = context.packageName
-    val candidates = buildList {
-        add(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-        add(
-            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                data = Uri.fromParts("package", pkg, null)
-            },
+    startFirstAvailable(context, settingsCandidates(context, wantDialog = false))
+}
+
+private fun brandText(): String = (Build.BRAND + " " + Build.MANUFACTURER).lowercase()
+
+private fun oemFamily(): Boolean {
+    val brand = brandText()
+    return brand.contains("oppo") ||
+        brand.contains("oneplus") ||
+        brand.contains("oplus") ||
+        brand.contains("realme") ||
+        brand.contains("xiaomi") ||
+        brand.contains("redmi") ||
+        brand.contains("poco") ||
+        brand.contains("huawei") ||
+        brand.contains("honor") ||
+        brand.contains("vivo") ||
+        brand.contains("iqoo") ||
+        brand.contains("samsung") ||
+        brand.contains("meizu") ||
+        brand.contains("nubia") ||
+        brand.contains("lenovo")
+}
+
+private fun colorOsFamily(): Boolean {
+    val brand = brandText()
+    return brand.contains("oppo") ||
+        brand.contains("oneplus") ||
+        brand.contains("oplus") ||
+        brand.contains("realme")
+}
+
+private fun oemCandidates(): List<Intent> {
+    val brand = brandText()
+    val targets: List<Pair<String, String>> = when {
+        brand.contains("xiaomi") || brand.contains("redmi") || brand.contains("poco") -> listOf(
+            "com.miui.securitycenter" to "com.miui.permcenter.autostart.AutoStartManagementActivity",
         )
+        brand.contains("huawei") || brand.contains("honor") -> listOf(
+            "com.huawei.systemmanager" to "com.huawei.systemmanager.optimize.process.ProtectActivity",
+            "com.huawei.systemmanager" to
+                "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+        )
+        brand.contains("vivo") || brand.contains("iqoo") -> listOf(
+            "com.vivo.permissionmanager" to
+                "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+        )
+        brand.contains("samsung") -> listOf(
+            "com.samsung.android.lool" to "com.samsung.android.sm.ui.battery.BatteryActivity",
+        )
+        else -> emptyList()
     }
-    startFirstAvailable(context, candidates)
+    return targets.map { (pkg, cls) ->
+        Intent().setComponent(android.content.ComponentName(pkg, cls))
+    }
+}
+
+private fun settingsCandidates(context: Context, wantDialog: Boolean): List<Intent> {
+    val pkg = context.packageName
+    val details = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+        data = Uri.fromParts("package", pkg, null)
+    }
+    val whitelist = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+    val root = Intent(Settings.ACTION_SETTINGS)
+    val pages = if (colorOsFamily()) {
+        listOf(details, whitelist, root)
+    } else {
+        listOf(whitelist, details, root)
+    }
+    val oem = oemCandidates()
+    if (!wantDialog) return oem + pages
+    val dialog = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+        data = Uri.fromParts("package", pkg, null)
+    }
+    return listOf(dialog) + oem + pages
 }
 
 private fun startFirstAvailable(context: Context, candidates: List<Intent>) {
     for (intent in candidates) {
-        val ok = runCatching {
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            context.startActivity(intent)
-        }.isSuccess
+        val resolvable = runCatching {
+            context.packageManager.resolveActivity(intent, 0) != null
+        }.getOrDefault(false)
+        if (!resolvable) continue
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val ok = runCatching { context.startActivity(intent) }.isSuccess
         if (ok) return
     }
 }

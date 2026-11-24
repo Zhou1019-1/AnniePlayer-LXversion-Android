@@ -69,6 +69,9 @@ object WrapperLite {
     val installProgress: StateFlow<Pair<Float, String>> = _installProgress.asStateFlow()
 
     private const val MAX_LOGS = 800
+    private const val OP_RUN_ANY_IN_BACKGROUND = "android:run_any_in_background"
+    private const val STAND_BY_BUCKET_RARE = 40
+    private const val KEY_OEM_HINT = "oem_panel_hint"
 
     fun init(ctx: Context) {
         if (::appContext.isInitialized) return
@@ -312,38 +315,163 @@ object WrapperLite {
         runCatching { appContext.stopService(Intent(appContext, WrapperService::class.java)) }
     }
 
-    /**
-     * 跳到系统的「耗电管理 / 电池优化」入口。
-     *
-     * 欧加系（ColorOS/Oplus）会拦掉标准的电池优化对话框，所以按优先级试一串：
-     * 1. 标准对话框（原生/类原生一次点掉）
-     * 2. 电池优化白名单列表页
-     * 3. 应用详情页（ColorOS 上的「耗电管理」「自启动」都在这里面）
-     */
-    fun openBatterySettings(ctx: Context) {
-        val pm = ctx.getSystemService(android.os.PowerManager::class.java)
-        val ignoring = pm?.isIgnoringBatteryOptimizations(ctx.packageName) == true
-        appendLog(
-            if (ignoring) "[local] 当前已在电池优化白名单"
-            else "[local] 当前未加入白名单，正在打开系统设置…",
-        )
-
-        val pkg = Uri.parse("package:" + ctx.packageName)
-        val candidates = listOf(
-            Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                .setData(pkg),
-            Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS),
-            Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                .setData(pkg),
-        )
-        for (intent in candidates) {
-            if (runCatching {
-                    ctx.startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                }.isSuccess
-            ) {
-                return
-            }
+    fun handleStartupBackgroundCheck(ctx: Context) {
+        val state = readBackgroundState(ctx)
+        if (state.unrestricted) return
+        if (state.oemPanelRequired) {
+            if (prefs().getBoolean(KEY_OEM_HINT, false)) return
+            prefs().edit().putBoolean(KEY_OEM_HINT, true).apply()
+            startFirstAvailable(ctx, settingsPages(ctx))
+            return
         }
+        if (state.dozeExempt != false) return
+        runCatching {
+            ctx.startActivity(
+                Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(Uri.parse("package:" + ctx.packageName))
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }
+    }
+
+    private fun settingsPages(ctx: Context): List<Intent> {
+        val pkg = Uri.parse("package:" + ctx.packageName)
+        val details = Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
+            .setData(pkg)
+        val whitelist = Intent(android.provider.Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
+        val root = Intent(android.provider.Settings.ACTION_SETTINGS)
+        val pages = if (colorOsFamily()) {
+            listOf(details, whitelist, root)
+        } else {
+            listOf(whitelist, details, root)
+        }
+        return oemCandidates() + pages
+    }
+
+    fun reportBackgroundBlockIfAny(ctx: Context) {
+        val state = readBackgroundState(ctx)
+        if (state.unrestricted) return
+        val line = "[local] ${state.describe()}"
+        if (_logs.value.lastOrNull() == line) return
+        appendLog(line)
+    }
+
+    fun openBatterySettings(ctx: Context) {
+        val state = readBackgroundState(ctx)
+        appendLog("[local] ${state.describe()}")
+
+        val all = settingsPages(ctx)
+        val candidates = if (state.dozeExempt == false && !oemFamily()) {
+            listOf(
+                Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(Uri.parse("package:" + ctx.packageName)),
+            ) + all
+        } else {
+            all
+        }
+        if (startFirstAvailable(ctx, candidates)) return
         appendLog("[local] 没能打开系统设置页，请手动到 设置 → 电池 → 耗电管理")
+    }
+
+    private fun oemCandidates(): List<Intent> {
+        val brand = (android.os.Build.BRAND + " " + android.os.Build.MANUFACTURER).lowercase()
+        val targets: List<Pair<String, String>> = when {
+            brand.contains("xiaomi") || brand.contains("redmi") || brand.contains("poco") -> listOf(
+                "com.miui.securitycenter" to
+                    "com.miui.permcenter.autostart.AutoStartManagementActivity",
+            )
+            brand.contains("huawei") || brand.contains("honor") -> listOf(
+                "com.huawei.systemmanager" to
+                    "com.huawei.systemmanager.optimize.process.ProtectActivity",
+                "com.huawei.systemmanager" to
+                    "com.huawei.systemmanager.startupmgr.ui.StartupNormalAppListActivity",
+            )
+            brand.contains("vivo") || brand.contains("iqoo") -> listOf(
+                "com.vivo.permissionmanager" to
+                    "com.vivo.permissionmanager.activity.BgStartUpManagerActivity",
+            )
+            brand.contains("samsung") -> listOf(
+                "com.samsung.android.lool" to "com.samsung.android.sm.ui.battery.BatteryActivity",
+            )
+            else -> emptyList()
+        }
+        return targets.map { (pkg, cls) ->
+            Intent().setComponent(android.content.ComponentName(pkg, cls))
+        }
+    }
+
+    private fun readBackgroundState(ctx: Context): BackgroundState {
+        val pm = ctx.getSystemService(android.os.PowerManager::class.java)
+        val dozeExempt = runCatching {
+            pm?.isIgnoringBatteryOptimizations(ctx.packageName)
+        }.getOrNull()
+        return BackgroundState(
+            dozeExempt = dozeExempt,
+            bucketRestricted = (readStandbyBucket(ctx) ?: 0) >= STAND_BY_BUCKET_RARE,
+            opsBlocked = readBackgroundOps(ctx) == false,
+            oemPanelRequired = oemFamily(),
+        )
+    }
+
+    private fun readStandbyBucket(ctx: Context): Int? {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.P) return null
+        val usm = ctx.getSystemService(android.app.usage.UsageStatsManager::class.java)
+            ?: return null
+        return runCatching { usm.appStandbyBucket }.getOrNull()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun readBackgroundOps(ctx: Context): Boolean? {
+        if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.M) return null
+        val ops = ctx.getSystemService(android.app.AppOpsManager::class.java) ?: return null
+        return runCatching {
+            val uid = ctx.applicationInfo.uid
+            val mode = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                ops.unsafeCheckOpNoThrow(OP_RUN_ANY_IN_BACKGROUND, uid, ctx.packageName)
+            } else {
+                ops.checkOpNoThrow(OP_RUN_ANY_IN_BACKGROUND, uid, ctx.packageName)
+            }
+            mode == android.app.AppOpsManager.MODE_ALLOWED ||
+                mode == android.app.AppOpsManager.MODE_DEFAULT
+        }.getOrNull()
+    }
+
+    private fun oemFamily(): Boolean {
+        val brand = (android.os.Build.BRAND + " " + android.os.Build.MANUFACTURER).lowercase()
+        return brand.contains("oppo") ||
+            brand.contains("oneplus") ||
+            brand.contains("oplus") ||
+            brand.contains("realme") ||
+            brand.contains("xiaomi") ||
+            brand.contains("redmi") ||
+            brand.contains("poco") ||
+            brand.contains("huawei") ||
+            brand.contains("honor") ||
+            brand.contains("vivo") ||
+            brand.contains("iqoo") ||
+            brand.contains("samsung") ||
+            brand.contains("meizu") ||
+            brand.contains("nubia") ||
+            brand.contains("lenovo")
+    }
+
+    private fun colorOsFamily(): Boolean {
+        val brand = (android.os.Build.BRAND + " " + android.os.Build.MANUFACTURER).lowercase()
+        return brand.contains("oppo") ||
+            brand.contains("oneplus") ||
+            brand.contains("oplus") ||
+            brand.contains("realme")
+    }
+
+    private fun startFirstAvailable(ctx: Context, candidates: List<Intent>): Boolean {
+        for (intent in candidates) {
+            val resolvable = runCatching {
+                ctx.packageManager.resolveActivity(intent, 0) != null
+            }.getOrDefault(false)
+            if (!resolvable) continue
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            if (runCatching { ctx.startActivity(intent) }.isSuccess) return true
+        }
+        return false
     }
 }

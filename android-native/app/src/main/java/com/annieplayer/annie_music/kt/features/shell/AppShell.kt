@@ -47,7 +47,9 @@ import com.annieplayer.annie_music.kt.core.audio.MediaPlayerBackend
 import com.annieplayer.annie_music.kt.core.audio.TuningEngine
 import com.annieplayer.annie_music.kt.core.platform.MediaStoreScan
 import com.annieplayer.annie_music.kt.core.platform.exitAppCompletely
-import com.annieplayer.annie_music.kt.core.platform.isIgnoringBatteryOptimizations
+import com.annieplayer.annie_music.kt.core.platform.BackgroundState
+import com.annieplayer.annie_music.kt.core.platform.FreezeWatch
+import com.annieplayer.annie_music.kt.core.platform.readBackgroundState
 import com.annieplayer.annie_music.kt.core.platform.isManageStorageGranted
 import com.annieplayer.annie_music.kt.core.platform.openBatteryOptimizationSettings
 import com.annieplayer.annie_music.kt.core.platform.requestIgnoreBatteryOptimizations
@@ -501,13 +503,14 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
         com.annieplayer.annie_music.kt.core.audio.UsbAudioDirect.ensurePermissions(ctx)
     }
     var storageGranted by remember { mutableStateOf<Boolean?>(null) }
-    // 「耗电优化」白名单状态：抽屉打开时 + 从系统设置页回来（ON_RESUME）时重新检测
-    var batteryExempt by remember { mutableStateOf<Boolean?>(null) }
+    var backgroundState by remember { mutableStateOf<BackgroundState?>(null) }
+    val freezeStats by FreezeWatch.stats.collectAsState()
+    val batteryState = backgroundState?.copy(freeze = freezeStats)
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
-                batteryExempt = isIgnoringBatteryOptimizations(ctx)
+                backgroundState = readBackgroundState(ctx)
                 storageGranted = isManageStorageGranted(ctx)
                 // 插上 DAC 后回到前台补一次授权（已有权限时是空操作，不会重复弹窗）
                 com.annieplayer.annie_music.kt.core.audio.UsbAudioDirect.ensurePermissions(ctx)
@@ -516,10 +519,11 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
     }
-    LaunchedEffect(uiState.drawerVisible) {
+    LaunchedEffect(Unit) { FreezeWatch.start(ctx) }
+    LaunchedEffect(ctx, uiState.drawerVisible) {
         if (uiState.drawerVisible) {
             storageGranted = isManageStorageGranted(ctx)
-            batteryExempt = isIgnoringBatteryOptimizations(ctx)
+            backgroundState = readBackgroundState(ctx)
         }
     }
 
@@ -1423,7 +1427,7 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                 // 「所有文件访问」权限流程尚未移植：保持未授权文案，点击暂为空操作
                 storageGranted = storageGranted,
                 onRequestStorage = { requestManageStorage(ctx) },
-                batteryExempt = batteryExempt,
+                battery = batteryState,
                 onToggleBattery = { target ->
                     if (target) {
                         requestIgnoreBatteryOptimizations(ctx)

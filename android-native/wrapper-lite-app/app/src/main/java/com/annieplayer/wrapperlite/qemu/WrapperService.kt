@@ -7,17 +7,31 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
+import android.os.SystemClock
 
-/**
- * 前台服务：只为把进程钉在后台，真正的 QEMU 由 [WrapperLite.runner] 托管。
- *
- * 不加这个的话，App 一退到后台就会被系统冻结，guest 里的 HTTP 服务跟着断。
- */
 class WrapperService : Service() {
 
     private var wakeLock: PowerManager.WakeLock? = null
+    private val handler = Handler(Looper.getMainLooper())
+    private var lastUptime = 0L
+
+    private val heartbeat = object : Runnable {
+        override fun run() {
+            val uptime = SystemClock.uptimeMillis()
+            val frozenMillis = (uptime - lastUptime) - HEARTBEAT_MILLIS
+            lastUptime = uptime
+            if (frozenMillis >= MIN_REPORT_MILLIS) {
+                WrapperLite.appendLog(
+                    "[local] 后台被冻结 ${frozenMillis / 1000} 秒（系统限制了后台运行）",
+                )
+            }
+            handler.postDelayed(this, HEARTBEAT_MILLIS)
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -25,6 +39,8 @@ class WrapperService : Service() {
         createChannel()
         startInForeground("运行中")
         acquireWakeLock()
+        lastUptime = SystemClock.uptimeMillis()
+        handler.postDelayed(heartbeat, HEARTBEAT_MILLIS)
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -32,12 +48,6 @@ class WrapperService : Service() {
         return START_STICKY
     }
 
-    /**
-     * 用户从最近任务里划掉 App 时调用。
-     *
-     * 这里选择「划掉即停」：key 服务靠前台通知常驻，用户主动划掉就是明确要它停，
-     * 顺手把 QEMU 一起收掉，不留后台进程。
-     */
     override fun onTaskRemoved(rootIntent: Intent?) {
         WrapperLite.stopServing()
         super.onTaskRemoved(rootIntent)
@@ -45,17 +55,27 @@ class WrapperService : Service() {
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        WrapperLite.appendLog("[local] 前台服务达到系统时限（type=$fgsType），已按系统要求停止")
+        WrapperLite.stopServing()
+        stopSelf()
+    }
+
     override fun onDestroy() {
+        handler.removeCallbacks(heartbeat)
         releaseWakeLock()
-        // 服务没了就必须把 QEMU 也收掉，否则会留下孤儿进程一直占着端口
         WrapperLite.onServiceDestroyed()
         super.onDestroy()
     }
 
     private fun startInForeground(text: String) {
         val notification = buildNotification(text)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
@@ -92,7 +112,7 @@ class WrapperService : Service() {
             val pm = getSystemService(PowerManager::class.java) ?: return
             wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "WrapperLite::qemu").apply {
                 setReferenceCounted(false)
-                acquire(12 * 60 * 60 * 1000L)
+                acquire(24 * 60 * 60 * 1000L)
             }
         }
     }
@@ -107,5 +127,7 @@ class WrapperService : Service() {
     private companion object {
         const val CHANNEL_ID = "wrapper_lite_service"
         const val NOTIFICATION_ID = 1201
+        const val HEARTBEAT_MILLIS = 30_000L
+        const val MIN_REPORT_MILLIS = 15_000L
     }
 }
