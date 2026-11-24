@@ -71,7 +71,6 @@ object WrapperLite {
     private const val MAX_LOGS = 800
     private const val OP_RUN_ANY_IN_BACKGROUND = "android:run_any_in_background"
     private const val STAND_BY_BUCKET_RARE = 40
-    private const val KEY_OEM_HINT = "oem_panel_hint"
 
     fun init(ctx: Context) {
         if (::appContext.isInitialized) return
@@ -315,24 +314,8 @@ object WrapperLite {
         runCatching { appContext.stopService(Intent(appContext, WrapperService::class.java)) }
     }
 
-    fun handleStartupBackgroundCheck(ctx: Context) {
-        val state = readBackgroundState(ctx)
-        if (state.unrestricted) return
-        if (state.oemPanelRequired) {
-            if (prefs().getBoolean(KEY_OEM_HINT, false)) return
-            prefs().edit().putBoolean(KEY_OEM_HINT, true).apply()
-            startFirstAvailable(ctx, settingsPages(ctx))
-            return
-        }
-        if (state.dozeExempt != false) return
-        runCatching {
-            ctx.startActivity(
-                Intent(android.provider.Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
-                    .setData(Uri.parse("package:" + ctx.packageName))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-            )
-        }
-    }
+    fun backgroundWarning(ctx: Context): BackgroundState? =
+        readBackgroundState(ctx).takeUnless { it.unrestricted }
 
     private fun settingsPages(ctx: Context): List<Intent> {
         val pkg = Uri.parse("package:" + ctx.packageName)

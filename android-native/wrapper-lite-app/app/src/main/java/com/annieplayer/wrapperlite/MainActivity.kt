@@ -25,7 +25,6 @@ class MainActivity : ComponentActivity() {
         WrapperLite.init(applicationContext)
         WrapperLite.installIfNeeded()
         askNotificationPermission()
-        ensureBatteryOptimization()
 
         setContent {
             WrapperLiteTheme {
@@ -67,9 +66,5 @@ class MainActivity : ComponentActivity() {
         if (!granted) {
             runCatching { notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS) }
         }
-    }
-
-    private fun ensureBatteryOptimization() {
-        WrapperLite.handleStartupBackgroundCheck(this)
     }
 }
