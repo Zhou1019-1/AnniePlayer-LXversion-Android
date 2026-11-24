@@ -27,6 +27,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -50,6 +51,7 @@ import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
@@ -75,6 +77,9 @@ import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 import com.annieplayer.annie_music.kt.ui.theme.AnnieTypography
 import kotlinx.coroutines.launch
 
+private const val WrapperLiteDownloadUrl =
+    "https://github.com/Zhou1019-1/AnniePlayer-LXversion-Android/releases"
+
 /**
  * 「Apple Music 服务」浮层：**本机切换 + 远程 Wrapper 地址管理**。
  *
@@ -97,6 +102,7 @@ fun AppleServiceSheet(
     modifier: Modifier = Modifier,
 ) {
     val scope = rememberCoroutineScope()
+    val uriHandler = LocalUriHandler.current
     val wrappers by AppleWrapperRegistry.wrappers.collectAsState()
 
     var useLocal by remember { mutableStateOf(AppleServiceSettings.useLocal) }
@@ -227,6 +233,45 @@ fun AppleServiceSheet(
                         contentDescription = "添加 Wrapper 地址",
                         tint = AppColors.white,
                         modifier = Modifier.size(AppIconSize.icon24),
+                    )
+                }
+            }
+
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(
+                        horizontal = AppSpacing.screenPaddingH,
+                        vertical = AppSpacing.sp8,
+                    )
+                    .background(AppColors.whiteA06, RoundedCornerShape(AppRadius.card))
+                    .clickableNoRipple {
+                        runCatching { uriHandler.openUri(WrapperLiteDownloadUrl) }
+                    }
+                    .padding(
+                        horizontal = AppSpacing.sp16,
+                        vertical = AppSpacing.sp12,
+                    ),
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            text = "下载 WrapperLite",
+                            color = AppColors.white,
+                            fontSize = AppFontSize.base,
+                        )
+                        Spacer(Modifier.height(AppSpacing.sp4))
+                        Text(
+                            text = "未安装本机服务时，从发布页获取安装包",
+                            color = AppColors.white54,
+                            fontSize = AppFontSize.sm,
+                        )
+                    }
+                    Icon(
+                        imageVector = Icons.Default.KeyboardArrowRight,
+                        contentDescription = null,
+                        tint = AppColors.glyphDim,
+                        modifier = Modifier.size(AppIconSize.icon18),
                     )
                 }
             }
