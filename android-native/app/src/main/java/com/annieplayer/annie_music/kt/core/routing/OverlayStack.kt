@@ -76,6 +76,9 @@ enum class Overlay(
     /** 联系方式弹窗（ContactModal）。 */
     CONTACT_MODAL("contactModal"),
 
+    /** 检查更新弹窗（UpdateSheet）。 */
+    UPDATE_SHEET("updateSheet"),
+
     /** 「下载中」轻提示（toast）。 */
     DOWNLOAD_PROGRESS_TOAST("downloadProgressToast"),
     ;
@@ -109,6 +112,7 @@ enum class Overlay(
             QUALITY_PICKER_BATCH,
             QUEUE_SHEET,
             CONTACT_MODAL,
+            UPDATE_SHEET,
             DOWNLOAD_PROGRESS_TOAST,
         )
     }
@@ -162,6 +166,7 @@ enum class BackTarget(
     LAN_REMOTE("lanRemote"),
     TRANSLATE_PICKER("translatePicker"),
     CACHE_CLEAR("cacheClear"),
+    UPDATE_DIALOG("updateDialog"),
     CONTACT("contact"),
     SOURCE_PICKER("sourcePicker"),
     LX_PLUGIN_MANAGER("lxPluginManager"),
@@ -235,6 +240,8 @@ data class OverlayVisibilityFlags(
     val cacheClear: Boolean = false,
     /** 本地歌曲删除确认弹窗是否可见。 */
     val localDelete: Boolean = false,
+    /** 检查更新弹窗是否可见。 */
+    val update: Boolean = false,
     /** 联系方式弹窗是否可见。 */
     val contact: Boolean = false,
     /** 音源选择器是否可见（`SearchScreenState.sourcePickerVisible`，不在 UiState 里）。 */
@@ -294,6 +301,7 @@ private val BACK_RULES: List<BackRule> = listOf(
     BackRule(BackTarget.LAN_REMOTE) { it.lanRemote },
     BackRule(BackTarget.TRANSLATE_PICKER) { it.translatePicker },
     BackRule(BackTarget.CACHE_CLEAR) { it.cacheClear },
+    BackRule(BackTarget.UPDATE_DIALOG) { it.update },
     BackRule(BackTarget.CONTACT) { it.contact },
     BackRule(BackTarget.SOURCE_PICKER) { it.sourcePicker },
     BackRule(BackTarget.DSD_OUTPUT) { it.dsdOutput },

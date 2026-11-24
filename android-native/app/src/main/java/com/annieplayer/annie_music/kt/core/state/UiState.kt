@@ -566,6 +566,7 @@ data class PlaylistPickerRequest(
     val artistPickerVisible: Boolean = false,
     val pickerSong: Song? = null,
     val contactVisible: Boolean = false,
+    val updateVisible: Boolean = false,
 
     /** 「清除缓存」弹窗（列出各类缓存体积，勾选后清理） */
     val cacheClearVisible: Boolean = false,
@@ -654,6 +655,7 @@ data class PlaylistPickerRequest(
         artistPickerVisible: Boolean? = null,
         pickerSong: Song? = null,
         contactVisible: Boolean? = null,
+        updateVisible: Boolean? = null,
     cacheClearVisible: Boolean? = null,
         isDragging: Boolean? = null,
         seekRatio: Double? = null,
@@ -684,6 +686,7 @@ data class PlaylistPickerRequest(
         artistPickerVisible = artistPickerVisible ?: this.artistPickerVisible,
         pickerSong = pickerSong ?: this.pickerSong,
         contactVisible = contactVisible ?: this.contactVisible,
+        updateVisible = updateVisible ?: this.updateVisible,
         cacheClearVisible = cacheClearVisible ?: this.cacheClearVisible,
         isDragging = isDragging ?: this.isDragging,
         seekRatio = seekRatio ?: this.seekRatio,
@@ -802,6 +805,10 @@ class UiViewModel : ViewModel() {
 
     fun setContactVisible(visible: Boolean) {
         _state.value = _state.value.copyWith(contactVisible = visible)
+    }
+
+    fun setUpdateVisible(visible: Boolean) {
+        _state.value = _state.value.copyWith(updateVisible = visible)
     }
 
     fun setCacheClearVisible(visible: Boolean) {
@@ -972,6 +979,7 @@ fun UiState.toOverlayFlags(
     cacheClear = cacheClearVisible,
     localDelete = localDeleteTarget != null || localDeleteBatch != null,
     contact = contactVisible,
+    update = updateVisible,
     sourcePicker = sourcePicker,
     lxPluginManager = lxPluginManagerVisible,
     dsdOutput = dsdOutputVisible,

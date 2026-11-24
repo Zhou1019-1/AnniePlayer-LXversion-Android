@@ -30,6 +30,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import android.widget.Toast
 import android.util.Log
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,6 +56,7 @@ import com.annieplayer.annie_music.kt.core.routing.BackTarget
 import com.annieplayer.annie_music.kt.core.routing.PageCloseRelay
 import com.annieplayer.annie_music.kt.core.routing.handleBack
 import com.annieplayer.annie_music.kt.core.state.AppShellViewModel
+import com.annieplayer.annie_music.kt.core.state.UpdateState
 import com.annieplayer.annie_music.kt.core.state.AlbumRoute
 import com.annieplayer.annie_music.kt.core.state.PlaylistRoute
 import com.annieplayer.annie_music.kt.core.state.SingerRoute
@@ -100,6 +102,7 @@ import com.annieplayer.annie_music.kt.core.state.MoreSettings
 import com.annieplayer.annie_music.kt.core.state.MultiSelectOrigin
 import com.annieplayer.annie_music.kt.core.state.MultiSelectSheetState
 import com.annieplayer.annie_music.kt.data.favorites.PlaylistScope
+import com.annieplayer.annie_music.kt.data.sources.update.UpdateOutcome
 import com.annieplayer.annie_music.kt.core.state.PlayerViewModel
 import com.annieplayer.annie_music.kt.core.state.QobuzViewModel
 import com.annieplayer.annie_music.kt.core.state.SearchSelectionViewModel
@@ -160,6 +163,7 @@ import com.annieplayer.annie_music.kt.ui.theme.LocalCoverThemePalette
 import com.annieplayer.annie_music.kt.widgets.AlbumDetailSheet
 import com.annieplayer.annie_music.kt.widgets.CacheClearModal
 import com.annieplayer.annie_music.kt.widgets.ContactModal
+import com.annieplayer.annie_music.kt.widgets.UpdateSheet
 import com.annieplayer.annie_music.kt.widgets.DetailQualityPickerHost
 import com.annieplayer.annie_music.kt.widgets.DownloadQueueSheet
 import com.annieplayer.annie_music.kt.widgets.GlobalOverlays
@@ -661,11 +665,25 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
         uiState.qobuzTokenVisible ||
         uiState.kkboxAccountVisible ||
         uiState.contactVisible ||
+        uiState.updateVisible ||
         uiState.cacheClearVisible ||
         uiState.lxPluginManagerVisible ||
         uiState.dsdOutputVisible ||
         st.sourcePickerVisible ||
                 dl.batchPickerVisible
+
+    val anyOverlayNow by rememberUpdatedState(anyOverlayVisible)
+    val localVersion = remember { UpdateState.localVersion(ctx) }
+    val updateStatus by UpdateState.status.collectAsState()
+    LaunchedEffect(Unit) {
+        if (!UpdateState.shouldAutoCheck()) return@LaunchedEffect
+        delay(3_000)
+        val result = UpdateState.check(localVersion.code, localVersion.name, manual = false)
+        val remoteCode = result.info?.versionCode
+        if (result.hasNewer && remoteCode != UpdateState.skippedVersionCode() && !anyOverlayNow) {
+            uiViewModel.setUpdateVisible(true)
+        }
+    }
     LaunchedEffect(anyOverlayVisible) {
         if (anyOverlayVisible) focusManager.clearFocus()
     }
@@ -716,6 +734,7 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
         uiState.kkboxAccountVisible ||
         uiState.cacheClearVisible ||
         uiState.contactVisible ||
+        uiState.updateVisible ||
         uiState.localScanVisible ||
         uiState.lanRemoteVisible ||
         uiState.pageStack.lastOrNull() is LocalTagImportRoute ||
@@ -1420,6 +1439,20 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                     saveDirPath = null
                 },
                 onContact = { uiViewModel.setContactVisible(true) },
+                updateSubtitle = when {
+                    updateStatus.checking -> "正在检查…"
+                    updateStatus.hasNewer -> "发现新版本 ${updateStatus.info?.version.orEmpty()}"
+                    updateStatus.outcome == UpdateOutcome.UNKNOWN -> "最新版未标注 versionCode"
+                    updateStatus.outcome == UpdateOutcome.FAILED -> "检查失败，点此重试"
+                    updateStatus.outcome == UpdateOutcome.LATEST -> "已是最新版本"
+                    else -> null
+                },
+                onCheckUpdate = {
+                    uiViewModel.setUpdateVisible(true)
+                    scope.launch {
+                        UpdateState.check(localVersion.code, localVersion.name, manual = true)
+                    }
+                },
                 onPcVersion = {
                     uriHandler.openUri("https://github.com/Zhou1019-1/AnniePlayer-LXversion-Windows")
                 },
@@ -2192,6 +2225,22 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
             ContactModal(
                 visible = uiState.contactVisible,
                 onClose = { uiViewModel.setContactVisible(false) },
+            )
+            UpdateSheet(
+                visible = uiState.updateVisible,
+                status = updateStatus,
+                localVersion = localVersion,
+                onCheckAgain = {
+                    scope.launch {
+                        UpdateState.check(localVersion.code, localVersion.name, manual = true)
+                    }
+                },
+                onOpenPage = { url -> uriHandler.openUri(url) },
+                onSkipVersion = { code ->
+                    UpdateState.markSkipped(code)
+                    uiViewModel.setUpdateVisible(false)
+                },
+                onClose = { uiViewModel.setUpdateVisible(false) },
             )
             CacheClearModal(
                 visible = uiState.cacheClearVisible,

@@ -118,6 +118,7 @@ class MainActivity : ComponentActivity() {
         KkboxViewModel.init(applicationContext)
         QobuzViewModel.init(applicationContext)
         MoreSettings.init(applicationContext)
+        com.annieplayer.annie_music.kt.core.state.UpdateState.init(applicationContext)
         // 独占通路的音量：绕开 mixer 后系统音量键调的是一个和声音无关的旋钮，
         // 所以这条链路的音量只能我方记、我方施加（见 `ExclusiveVolume`）。
         ExclusiveVolume.init(SharedPrefsVolumeStore(applicationContext))

@@ -29,6 +29,7 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.MailOutline
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Switch
@@ -111,6 +112,8 @@ fun MenuDrawer(
     onManageLxPlugins: () -> Unit = {},
     localScanExcluded: Int = 0,
     onLocalScan: () -> Unit = {},
+    updateSubtitle: String? = null,
+    onCheckUpdate: () -> Unit = {},
 ) {
     // 返回手势：打开时先关抽屉
     BackHandler(enabled = visible) { onClose() }
@@ -349,6 +352,19 @@ fun MenuDrawer(
                 icon = {
                     Icon(
                         imageVector = Icons.Default.MailOutline,
+                        contentDescription = null,
+                        tint = AppColors.glyphStrong,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                },
+            )
+            MenuDrawerRow(
+                label = "检查更新",
+                onTap = onCheckUpdate,
+                subtitle = updateSubtitle,
+                icon = {
+                    Icon(
+                        imageVector = Icons.Default.Refresh,
                         contentDescription = null,
                         tint = AppColors.glyphStrong,
                         modifier = Modifier.fillMaxSize(),
