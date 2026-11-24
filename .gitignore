@@ -72,4 +72,9 @@ android-native/native/ffmpeg/prefix*/
 android-native/.probe-backup/
 _scr/
 
+# 签名材料：密钥库与口令只在本机，绝不入库（CI 走 Environment Secret）
+*.jks
+*.keystore
+keystore.properties
+
 
