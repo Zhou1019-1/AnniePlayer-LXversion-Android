@@ -43,6 +43,13 @@ android {
     }
 
     buildTypes {
+        getByName("debug") {
+            signingConfig = if (hasReleaseKeystore) {
+                signingConfigs.getByName("release")
+            } else {
+                signingConfigs.getByName("debug")
+            }
+        }
         release {
             // 正式版开启代码/资源裁剪（R8）；debug 保持关闭便于调试。
             isMinifyEnabled = true
