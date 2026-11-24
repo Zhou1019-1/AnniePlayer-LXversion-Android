@@ -86,7 +86,7 @@ class HomeFeedState {
         if (!force && platform == target && loaded) return
         val seq = ++requestSeq
         // 换源立刻把旧内容清掉：否则新平台的骨架屏会盖在旧平台的卡片上（或反过来闪一下）
-        if (platform != target) shelves = emptyList()
+        if (force || platform != target) shelves = emptyList()
         platform = target
         loading = true
         loaded = false
@@ -95,6 +95,7 @@ class HomeFeedState {
             fetchHomeShelves(
                 platform = target,
                 kugouDiscoverToken = kugouDiscoverToken,
+                force = force,
             )
         }.getOrDefault(emptyList())
 

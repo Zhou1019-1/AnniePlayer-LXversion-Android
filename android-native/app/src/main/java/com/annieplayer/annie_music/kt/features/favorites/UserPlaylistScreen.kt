@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -32,6 +34,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
@@ -41,26 +44,44 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.annieplayer.annie_music.kt.R
 import com.annieplayer.annie_music.kt.core.audio.apple.ApplePrefetch
 import com.annieplayer.annie_music.kt.core.compose.activityViewModel
 import com.annieplayer.annie_music.kt.core.state.DownloadViewModel
 import com.annieplayer.annie_music.kt.core.state.FavoriteViewModel
 import com.annieplayer.annie_music.kt.core.state.PlayerViewModel
 import com.annieplayer.annie_music.kt.core.state.PlaylistDetailData
+import com.annieplayer.annie_music.kt.core.state.PlaylistPickerRequest
 import com.annieplayer.annie_music.kt.core.state.PlaylistRoute
 import com.annieplayer.annie_music.kt.core.state.UiViewModel
 import com.annieplayer.annie_music.kt.core.util.downloadQualityFor
 import com.annieplayer.annie_music.kt.core.util.enqueueDownload
+import com.annieplayer.annie_music.kt.core.util.extractCoverPaletteFromBytes
 import com.annieplayer.annie_music.kt.data.PlaylistService
 import com.annieplayer.annie_music.kt.data.favorites.FavoriteKeys
 import com.annieplayer.annie_music.kt.data.favorites.PlaylistScope
 import com.annieplayer.annie_music.kt.data.favorites.UserPlaylist
+import com.annieplayer.annie_music.kt.data.favorites.fallbackCover
+import com.annieplayer.annie_music.kt.data.favorites.songsNewestFirst
 import com.annieplayer.annie_music.kt.data.favorites.mergePlaylistSongs
 import com.annieplayer.annie_music.kt.data.local.LocalTrackMeta
 import com.annieplayer.annie_music.kt.data.model.MusicPlatform
@@ -69,9 +90,7 @@ import com.annieplayer.annie_music.kt.data.model.Song
 import com.annieplayer.annie_music.kt.data.playQualityLabelOf
 import com.annieplayer.annie_music.kt.features.downloads.batchDownloadQualities
 import com.annieplayer.annie_music.kt.features.downloads.downloadOneAndRegister
-import com.annieplayer.annie_music.kt.features.library.LocalDetailTopBar
 import com.annieplayer.annie_music.kt.features.library.LocalSongRow
-import com.annieplayer.annie_music.kt.features.library.LocalStaticBackdrop
 import com.annieplayer.annie_music.kt.ui.theme.AnnieTypography
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppFontSize
@@ -79,20 +98,35 @@ import com.annieplayer.annie_music.kt.ui.theme.AppFontWeight
 import com.annieplayer.annie_music.kt.ui.theme.AppIconSize
 import com.annieplayer.annie_music.kt.ui.theme.AppRadius
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
+import com.annieplayer.annie_music.kt.ui.theme.ColorPalette
+import com.annieplayer.annie_music.kt.widgets.CoverPaletteBackdrop
 import com.annieplayer.annie_music.kt.widgets.DetailPlayAllPill
 import com.annieplayer.annie_music.kt.widgets.DetailRoundIconButton
+import com.annieplayer.annie_music.kt.widgets.DetailTopBar
 import com.annieplayer.annie_music.kt.widgets.DownloadIconPlaceholder
+import com.annieplayer.annie_music.kt.widgets.HeaderPillButton
 import com.annieplayer.annie_music.kt.widgets.LocalDetailQualityPickerHost
+import com.annieplayer.annie_music.kt.widgets.SelectModeActions
+import com.annieplayer.annie_music.kt.widgets.blockTouches
+import com.annieplayer.annie_music.kt.widgets.heroCoverFade
 import com.annieplayer.annie_music.kt.widgets.MultiSelectDownloadBar
 import com.annieplayer.annie_music.kt.widgets.MusicNoteGlyph
 import com.annieplayer.annie_music.kt.widgets.QualityPickerSheet
+import com.annieplayer.annie_music.kt.widgets.PageTintEffect
+import com.annieplayer.annie_music.kt.widgets.ResumePlayingPill
 import com.annieplayer.annie_music.kt.widgets.SongTile
+import com.annieplayer.annie_music.kt.widgets.SongTrackRow
 import com.annieplayer.annie_music.kt.widgets.clickableRipple
+import com.annieplayer.annie_music.kt.widgets.rememberCoverPalette
+import com.annieplayer.annie_music.kt.widgets.rememberPlayingRowVisible
+import com.annieplayer.annie_music.kt.widgets.selectPillFill
 import com.annieplayer.annie_music.kt.widgets.shortScrollbar
 import kotlinx.coroutines.launch
 
 /** 封面 hero 边长 = 屏宽的六成，与在线歌单详情同一比例 */
 private const val HeroCoverFraction = 0.58f
+
+private fun mmssText(seconds: Int): String = "%d:%02d".format(seconds / 60, seconds % 60)
 
 /**
  * **自建播放列表详情**（`UserPlaylistRoute` 渲染它）。
@@ -127,7 +161,7 @@ fun UserPlaylistScreen(
     val playlist = remember(snapshot, playlistId) {
         snapshot.userPlaylists.firstOrNull { it.id == playlistId }
     }
-    val songs = playlist?.songs.orEmpty()
+    val songs = remember(playlist) { playlist?.songsNewestFirst.orEmpty() }
     // 队列用曲库的实时对象（自建歌单里可能有本地歌，理由同「我喜欢」）
     val liveSongs = rememberLiveSongs(songs)
     val playback by playerViewModel.state.collectAsState()
@@ -157,6 +191,31 @@ fun UserPlaylistScreen(
     fun toggleSelect(id: String) {
         if (!selectedIds.remove(id)) selectedIds.add(id)
     }
+
+    val heroCoverBytes = remember(snapshot, playlistId) {
+        if (playlistId.isEmpty()) null else favoriteViewModel.playlistCover(playlistId)
+    }
+    val fallbackCoverUrl = remember(snapshot, playlistId) { playlist?.fallbackCover.orEmpty() }
+    val urlPalette = rememberCoverPalette(fallbackCoverUrl)
+    var bytesPalette by remember(playlistId) { mutableStateOf<ColorPalette?>(null) }
+    LaunchedEffect(heroCoverBytes) {
+        val bytes = heroCoverBytes
+        bytesPalette = if (bytes == null || bytes.isEmpty()) {
+            null
+        } else {
+            extractCoverPaletteFromBytes(bytes)
+        }
+    }
+    val coverPalette = bytesPalette ?: urlPalette
+    PageTintEffect(uiViewModel, coverPalette, coverUrl = fallbackCoverUrl)
+    val heroListState = rememberLazyListState()
+    val resumeScope = rememberCoroutineScope()
+    val playingRowIndex = remember(songs, playback.currentSong?.id) {
+        val cur = playback.currentSong?.id
+        if (cur.isNullOrEmpty()) null else songs.indexOfFirst { it.id == cur }.takeIf { it >= 0 }
+    }
+    val playingRowVisible = rememberPlayingRowVisible(heroListState, playingRowIndex)
+    val selectFill = selectPillFill(coverPalette)
 
     suspend fun batchDownload(quality: Quality) {
         batchPickerVisible = false
@@ -188,59 +247,38 @@ fun UserPlaylistScreen(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        LocalStaticBackdrop(modifier = Modifier.fillMaxSize())
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .systemBarsPadding(),
-        ) {
-            LocalDetailTopBar(
-                title = playlist?.name?.takeIf { it.isNotBlank() } ?: "播放列表",
-                count = "${songs.size} 首",
-                onClose = onClose,
-                // 多选态：左「全选」右「完成」；普通态：右「多选」+「+」
-                actionSecondary = if (selectMode) {
-                    if (songs.isNotEmpty() && selectedIds.size == songs.size) "取消全选" else "全选"
-                } else {
-                    null
-                },
-                onActionSecondary = {
-                    if (selectedIds.size == songs.size) {
-                        selectedIds.clear()
-                    } else {
-                        selectedIds.clear()
-                        selectedIds.addAll(songs.map { it.id })
-                    }
-                },
-                // 多选态：左「全选」右「完成」；普通态：右「多选」+「+」。
-                // 两种 scope 都有多选，但用途不同：在线 = 批量下载，本地 = 批量移除。
-                action = if (selectMode) "完成" else "多选",
-                onAction = {
-                    selectMode = !selectMode
-                    selectedIds.clear()
-                },
-                // 「+」只在能真正导入时给出：本地自建歌单（scope=local）灌在线歌单就是混边
-                onAdd = if (!selectMode && playlist?.scope == PlaylistScope.online) {
-                    { importVisible = true }
-                } else {
-                    null
-                },
-            )
-
-            Box(
-                modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth(),
-            ) {
+        CoverPaletteBackdrop(
+            coverUrl = "playlist:$playlistId",
+            palette = coverPalette,
+            modifier = Modifier.fillMaxSize(),
+        )
+        val density = LocalDensity.current
+        var heroHeightPx by remember { mutableStateOf(0) }
+        var barBottomPx by remember { mutableStateOf(0) }
+        val heroOffset by remember(heroListState, heroHeightPx) {
+            derivedStateOf {
+                val first = heroListState.layoutInfo.visibleItemsInfo.firstOrNull()
+                if (first == null) 0 else (-first.offset).coerceIn(0, heroHeightPx)
+            }
+        }
+        Box(modifier = Modifier.fillMaxSize().clipToBounds()) {
+            Box(modifier = Modifier.fillMaxSize()) {
                 if (playlist == null) {
                     FavEmptyHint(text = "这个播放列表已经不在了")
                     return@Box
                 }
-                val listState = rememberLazyListState()
                 LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize().shortScrollbar(listState),
+                    state = heroListState,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .shortScrollbar(heroListState)
+                        .drawWithContent {
+                            clipRect(0f, barBottomPx.toFloat(), size.width, size.height) {
+                                this@drawWithContent.drawContent()
+                            }
+                        },
                     contentPadding = PaddingValues(
+                        top = with(density) { heroHeightPx.toDp() },
                         bottom = if (selectMode) {
                             // 多选下载条要压在底栏之上，列表末项别被它盖住
                             AppSpacing.listBottomInset + 56.dp
@@ -249,28 +287,6 @@ fun UserPlaylistScreen(
                         },
                     ),
                 ) {
-                    item(key = "hero") {
-                        UserPlaylistHero(
-                            playlist = playlist,
-                            // 自选封面存在 SQLite 里（BLOB），不走 URL
-                            coverBytes = remember(snapshot, playlist.id) {
-                                favoriteViewModel.playlistCover(playlist.id)
-                            },
-                            onPlayAll = {
-                                if (liveSongs.isNotEmpty()) {
-                                    playerViewModel.setQueue(liveSongs, 0)
-                                }
-                            },
-                            onDelete = { confirmDelete = true },
-                            // 本地歌单没有「下载」：文件本来就在盘上
-                            onDownload = if (playlist.scope == PlaylistScope.online) {
-                                { batchPickerVisible = true }
-                            } else {
-                                null
-                            },
-                            downloadEnabled = selectMode && selectedIds.isNotEmpty(),
-                        )
-                    }
                     if (songs.isEmpty()) {
                         item(key = "empty") {
                             FavEmptyHint(
@@ -288,34 +304,39 @@ fun UserPlaylistScreen(
                         } else {
                             null
                         }
-                        if (localMeta != null) {
-                            // 本地歌走曲库行；多选态下序号列变勾选框，点击整行 = 切换选中
-                            LocalSongRow(
-                                meta = localMeta,
-                                index = index,
-                                isActive = playback.currentSong?.id == localMeta.id,
-                                playingTint = AppColors.playingGray,
-                                onPlay = { playerViewModel.setQueue(liveSongs, index) },
-                                onMore = { uiViewModel.setSongActionsVisible(true, localMeta.toSong(), playlistId) },
-                                selectionMode = selectMode,
-                                selected = selectedIds.contains(localMeta.id),
-                                onToggleSelect = { toggleSelect(localMeta.id) },
-                            )
+                        val subtitle = if (localMeta != null) {
+                            listOfNotNull(
+                                localMeta.artistDisplay.takeIf { it.isNotBlank() },
+                                localMeta.album.takeIf {
+                                    it.isNotBlank() && it != localMeta.folderName
+                                },
+                            ).joinToString(" · ").ifEmpty { localMeta.folderName }
                         } else {
-                            SongTile(
-                                song = song,
-                                sourceLabel = song.platform.label,
-                                selectionMode = selectMode,
-                                selected = selectedIds.contains(song.id),
-                                onToggleSelect = { toggleSelect(it.id) },
-                                onPlay = { playerViewModel.setQueue(liveSongs, index) },
-                                // 带上 playlistId：面板据此多出「从本歌单移除」
-                                onDownload = { uiViewModel.setSongActionsVisible(true, it, playlistId) },
-                                isActive = playback.currentSong?.id == song.id &&
-                                    playback.currentSong?.platform == song.platform,
-                                downloadStatus = tasks[song.id]?.status,
-                            )
+                            listOfNotNull(
+                                song.artist.takeIf { it.isNotBlank() },
+                                song.album?.takeIf { it.isNotBlank() },
+                            ).joinToString(" · ")
                         }
+                        SongTrackRow(
+                            song = song,
+                            subtitle = subtitle,
+                            index = index,
+                            playing = playback.currentSong?.id == song.id &&
+                                playback.currentSong?.platform == song.platform,
+                            playingTint = coverPalette.readablePrimary(),
+                            onClick = { playerViewModel.setQueue(liveSongs, index) },
+                            onMore = {
+                                uiViewModel.setSongActionsVisible(
+                                    true,
+                                    localMeta?.toSong() ?: song,
+                                    playlistId,
+                                )
+                            },
+                            selectMode = selectMode,
+                            selected = selectedIds.contains(song.id),
+                            onToggleSelect = { toggleSelect(song.id) },
+                            downloadStatus = tasks[song.id]?.status,
+                        )
                     }
                 }
                 if (selectMode) {
@@ -344,8 +365,26 @@ fun UserPlaylistScreen(
                         )
                     }
                 }
+
+                if (!selectMode) {
+                    val resumeIndex = playingRowIndex
+                    ResumePlayingPill(
+                        visible = resumeIndex != null && !playingRowVisible,
+                        palette = coverPalette,
+                        onClick = {
+                            if (resumeIndex != null) {
+                                resumeScope.launch { heroListState.animateScrollToItem(resumeIndex) }
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(
+                                end = AppSpacing.sp16,
+                                bottom = AppSpacing.bottomBarInset + AppSpacing.sp12,
+                            ),
+                    )
+                }
             }
-        }
 
         // ── 批量音质面板：交给宿主渲染（迷你播放条之上） ──
         val pickerHost = LocalDetailQualityPickerHost.current
@@ -439,6 +478,111 @@ fun UserPlaylistScreen(
                 containerColor = AppColors.surface,
             )
         }
+            }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .offset { IntOffset(0, -heroOffset) }
+                .graphicsLayer { alpha = heroCoverFade(heroOffset, heroHeightPx) },
+        ) {
+            playlist?.let { live ->
+                UserPlaylistHero(
+                    playlist = live,
+                    // 自选封面存在 SQLite 里（BLOB），不走 URL
+                    coverBytes = heroCoverBytes,
+                    onPlayAll = {
+                        if (liveSongs.isNotEmpty()) {
+                            playerViewModel.setQueue(liveSongs, 0)
+                        }
+                    },
+                    onShuffleAll = {
+                        if (liveSongs.isNotEmpty()) {
+                            playerViewModel.setQueue(liveSongs, liveSongs.indices.random())
+                        }
+                    },
+                    selectMode = selectMode,
+                    selectedCount = selectedIds.size,
+                    onAddToPlaylist = {
+                        val picked = songs.filter { selectedIds.contains(it.id) }
+                        if (picked.isNotEmpty()) {
+                            uiViewModel.openPlaylistPicker(
+                                PlaylistPickerRequest(songs = picked, scope = PlaylistScope.local),
+                            )
+                        }
+                    },
+                    onDeleteSelected = {
+                        val picked = songs.filter { selectedIds.contains(it.id) }
+                        if (picked.isNotEmpty()) {
+                            favoriteViewModel.removeSongsFromUserPlaylist(playlistId, picked)
+                            selectMode = false
+                            selectedIds.clear()
+                        }
+                    },
+                    modifier = Modifier.onSizeChanged { heroHeightPx = it.height },
+                )
+            }
+        }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .blockTouches()
+                .onSizeChanged { barBottomPx = it.height }
+                .statusBarsPadding(),
+        ) {
+            DetailTopBar(
+                onClose = onClose,
+                topInset = false,
+                leading = {
+                Box(
+                    modifier = Modifier
+                        .clickableRipple { confirmDelete = true }
+                        .padding(AppSpacing.sp4),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "删除播放列表",
+                        tint = AppColors.white,
+                        modifier = Modifier.size(AppIconSize.icon20),
+                    )
+                }
+            },
+            actions = {
+                    SelectModeActions(
+                        selectMode = selectMode,
+                        selectedAll = songs.isNotEmpty() && selectedIds.size == songs.size,
+                        onToggleSelectAll = {
+                            if (selectedIds.size == songs.size) {
+                                selectedIds.clear()
+                            } else {
+                                selectedIds.clear()
+                                selectedIds.addAll(songs.map { it.id })
+                            }
+                        },
+                        onToggleSelectMode = {
+                            selectMode = !selectMode
+                            selectedIds.clear()
+                        },
+                        palette = coverPalette,
+                    )
+                    if (!selectMode && playlist?.scope == PlaylistScope.online) {
+                        HeaderPillButton(
+                            label = "",
+                            onClick = { importVisible = true },
+                            fill = selectFill,
+                            glyph = {
+                                Icon(
+                                    painter = painterResource(R.drawable.ic_action_add),
+                                    contentDescription = "链接导入",
+                                    tint = AppColors.white,
+                                    modifier = Modifier.size(AppIconSize.icon20),
+                                )
+                            },
+                        )
+                    }
+                },
+            )
+        }
     }
 }
 
@@ -489,90 +633,141 @@ private fun UserPlaylistHero(
     playlist: UserPlaylist,
     coverBytes: ByteArray?,
     onPlayAll: () -> Unit,
-    onDelete: () -> Unit,
-    /** null = 不画下载按钮（本地自建歌单） */
-    onDownload: (() -> Unit)?,
-    downloadEnabled: Boolean,
+    onShuffleAll: () -> Unit,
+    selectMode: Boolean,
+    selectedCount: Int,
+    onAddToPlaylist: () -> Unit,
+    onDeleteSelected: () -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = AppSpacing.sp24, vertical = AppSpacing.sp20),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(HeroCoverFraction)
-                .aspectRatio(1f)
-                .clip(RoundedCornerShape(AppRadius.panel))
-                .background(AppColors.whiteA05),
-            contentAlignment = Alignment.Center,
-        ) {
-            when {
-                coverBytes != null -> AsyncImage(
-                    model = coverBytes,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
+    val coverUrl = playlist.fallbackCover
+    Column(modifier = modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.fillMaxWidth().aspectRatio(0.92f)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+                    .drawWithContent {
+                        drawContent()
+                        drawRect(
+                            brush = Brush.verticalGradient(
+                                0f to Color.Black,
+                                0.62f to Color.Black,
+                                0.86f to Color.Black.copy(alpha = 0.55f),
+                                1f to Color.Transparent,
+                            ),
+                            blendMode = BlendMode.DstIn,
+                        )
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                when {
+                    coverBytes != null -> AsyncImage(
+                        model = coverBytes,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
 
-                playlist.cover.isNotEmpty() -> AsyncImage(
-                    model = playlist.cover,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
+                    coverUrl.isNotEmpty() -> AsyncImage(
+                        model = coverUrl,
+                        contentDescription = null,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
 
-                else -> MusicNoteGlyph(
-                    modifier = Modifier.size(AppIconSize.icon40),
-                    tint = AppColors.whiteA15,
+                    else -> MusicNoteGlyph(
+                        modifier = Modifier.size(AppIconSize.icon40),
+                        tint = AppColors.whiteA15,
+                    )
+                }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0.42f to Color.Transparent,
+                            0.70f to Color.Black.copy(alpha = 0.34f),
+                            0.90f to Color.Black.copy(alpha = 0.28f),
+                            1f to Color.Transparent,
+                        ),
+                    ),
+            )
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = AppSpacing.sp24, vertical = AppSpacing.sp16),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = playlist.name.ifBlank { "未命名播放列表" },
+                    color = AppColors.textPrimary,
+                    fontSize = AppFontSize.size26,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(modifier = Modifier.height(AppSpacing.sp4))
+                Text(
+                    text = "${playlist.songs.size} 首",
+                    color = AppColors.whiteA40,
+                    fontSize = AppFontSize.size13,
+                    textAlign = TextAlign.Center,
                 )
             }
         }
-        Spacer(modifier = Modifier.height(AppSpacing.sp16))
-        Text(
-            text = playlist.name.ifBlank { "未命名播放列表" },
-            color = AppColors.textPrimary,
-            fontSize = AppFontSize.size20,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(modifier = Modifier.height(AppSpacing.sp4))
-        Text(
-            text = "${playlist.songs.size} 首",
-            color = AppColors.whiteA40,
-            fontSize = AppFontSize.size13,
-            textAlign = TextAlign.Center,
-        )
-        Spacer(modifier = Modifier.height(AppSpacing.sp16))
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            DetailRoundIconButton(
-                onClick = onDelete,
-                enabled = true,
-            ) { tint ->
-                Icon(
-                    imageVector = Icons.Default.Delete,
-                    contentDescription = "删除播放列表",
-                    tint = if (tint == AppColors.white) AppColors.danger else tint,
-                    modifier = Modifier.size(AppIconSize.icon20),
-                )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = AppSpacing.sp16),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (selectMode) {
+                DetailRoundIconButton(
+                    onClick = onAddToPlaylist,
+                    enabled = selectedCount > 0,
+                ) { tint ->
+                    Icon(
+                        painter = painterResource(R.drawable.ic_action_playlist_add),
+                        contentDescription = "加入到歌单",
+                        tint = tint,
+                        modifier = Modifier.size(AppIconSize.icon22),
+                    )
+                }
+                Spacer(modifier = Modifier.width(AppSpacing.sp16))
             }
-            Spacer(modifier = Modifier.width(AppSpacing.sp16))
-            DetailPlayAllPill(
-                onClick = onPlayAll,
-                enabled = playlist.songs.isNotEmpty(),
-            )
-            if (onDownload != null) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                DetailPlayAllPill(
+                    onClick = onPlayAll,
+                    enabled = playlist.songs.isNotEmpty(),
+                )
                 Spacer(modifier = Modifier.width(AppSpacing.sp16))
                 DetailRoundIconButton(
-                    onClick = onDownload,
-                    enabled = downloadEnabled,
+                    onClick = onShuffleAll,
+                    enabled = playlist.songs.isNotEmpty(),
                 ) { tint ->
-                    DownloadIconPlaceholder(
-                        modifier = Modifier.size(AppIconSize.icon20),
+                    Icon(
+                        painter = painterResource(R.drawable.ic_action_shuffle),
+                        contentDescription = "随机播放",
                         tint = tint,
+                        modifier = Modifier.size(AppIconSize.icon22),
+                    )
+                }
+            }
+            if (selectMode) {
+                Spacer(modifier = Modifier.width(AppSpacing.sp16))
+                DetailRoundIconButton(
+                    onClick = onDeleteSelected,
+                    enabled = selectedCount > 0,
+                ) { tint ->
+                    Icon(
+                        imageVector = Icons.Default.Delete,
+                        contentDescription = "删除所选",
+                        tint = tint,
+                        modifier = Modifier.size(AppIconSize.icon20),
                     )
                 }
             }

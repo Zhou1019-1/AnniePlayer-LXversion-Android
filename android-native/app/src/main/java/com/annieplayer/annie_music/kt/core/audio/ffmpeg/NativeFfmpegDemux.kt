@@ -45,7 +45,9 @@ internal object NativeFfmpegDemux {
      * 读参数直接崩 —— 这个坑踩过一次。
      *
      * @param info 回填 `[0]` = **1 bit 采样率**（2822400 / 5644800 …，不是 PCM 网格）、
-     *   `[1]` = 声道数、`[2]` = 0（位深对 1-bit 流无意义）、`[3]` = 时长（毫秒）
+     *   `[1]` = 声道数、`[2]` = 0（位深对 1-bit 流无意义）、`[3]` = 时长（毫秒）、
+     *   `[4]` = **文件自身的位序**（0 = MSB-first，1 = LSB-first，需要反转成 MSB-first）。
+     *   只有长度 ≥ 5 的数组才回填 `[4]`：这条是加在不改签名的前提下扩出来的。
      */
     external fun openRaw(path: String, info: IntArray): Long
 
@@ -59,6 +61,24 @@ internal object NativeFfmpegDemux {
     const val PACK_NATIVE = 2
 
     /**
+     * [configRawPack] 的 `mode`：Native DSD 的 **16 bit 容器**（`0x1A000001`，4 字节一帧）。
+     *
+     * 输入交错 `L0 R0 L1 R1` → 输出 `L0 L1 R0 R1`。与 [PACK_OFF] 的区别只在字节顺序：
+     * 16 bit 容器下设备一帧只吃 4 字节（每声道 2 字节），直接用裸交错会被解释成
+     * "L=L0L1, R=L2L3" —— 两个声道都拿到左声道的数据。
+     */
+    const val PACK_NATIVE16 = 3
+
+    /**
+     * [configRawPack] 的 `mode`：飞傲 `DSD660` 的帧内布局（`0x1A000002`，8 字节一帧）。
+     *
+     * 输入交错 `L0 R0 L1 R1 L2 R2 L3 R3` → 输出 `L1 L0 R1 R0 L3 L2 R3 R2`。
+     * 依据：`libhello-jni.so` 的 `DsdConvertM7`(0x1911c8)；而 `libfiioaudio.so` 对这个
+     * format 判 `mode 7 = BYPASS`（不再重排），所以布局必须由我方给出。
+     */
+    const val PACK_DSD660 = 4
+
+    /**
      * 设置 raw DSD 的**线格式封装**，`openRaw` 之后、第一次 `read` 之前调用。
      *
      * 封装在 native 里做（拆声道 → 位反转 → 打包一次完成）：这样只是少一次跨语言往返
@@ -68,6 +88,17 @@ internal object NativeFfmpegDemux {
      * 独立入口而不是给 [openRaw] 加参数：签名一变，老 APK 配新 so 会按错位读参数崩。
      */
     external fun configRawPack(handle: Long, mode: Int, bigEndian: Boolean)
+
+    /**
+     * 同 [configRawPack]，但**能覆盖位序**（`bitReverse`）。
+     *
+     * 为什么需要它：`openRaw` 是从 `codec_id`（DSD_LSBF / MSBF）推"要不要位反转"的，
+     * 而**容器**（`audio_format_t` 的 DSD 段）对位序另有要求。两者叠加出四种组合，
+     * 打错方向不会报错、只会让 DAC 解出噪声（或静音），只能逐个试。
+     *
+     * 独立符号而不是改 [configRawPack] 的签名：签名一变，老 APK 配新 so 会按错位读参数崩。
+     */
+    external fun configRawPackEx(handle: Long, mode: Int, bigEndian: Boolean, bitReverse: Boolean)
 
     /**
      * 读一段 PCM（或封装后的 DSD 线格式字节）。

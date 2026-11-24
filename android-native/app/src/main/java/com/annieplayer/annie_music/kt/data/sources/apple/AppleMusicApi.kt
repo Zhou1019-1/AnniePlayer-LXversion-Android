@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.SharedPreferences
 import android.net.Uri
 import android.util.Base64
+import com.annieplayer.annie_music.kt.data.model.ALBUM_KIND_ALBUM
+import com.annieplayer.annie_music.kt.data.model.ALBUM_KIND_EP
+import com.annieplayer.annie_music.kt.data.model.ALBUM_KIND_SINGLE
 import com.annieplayer.annie_music.kt.data.model.Album
 import com.annieplayer.annie_music.kt.data.model.AlbumSong
 import com.annieplayer.annie_music.kt.data.model.Artist
@@ -128,8 +131,7 @@ private suspend fun _developerToken(forceRefresh: Boolean = false): String {
 }
 
 /** 真正去 music.apple.com 抓 token（只在 [_tokenMutex] 内调用） */
-private suspend fun _fetchDeveloperToken(): String {
-    val now = System.currentTimeMillis() / 1000
+private suspend fun _fetchDeveloperToken(): String {    val now = System.currentTimeMillis() / 1000
 
     // 浏览页 → 主脚本（约 3MB）→ 正则找 JWT。这条链路是**冷启动最容易抖的一步**，
     // 抓一次失败就整条 Apple 目录（含地区表）全挂，所以第一次失败立刻重来一次。
@@ -205,6 +207,8 @@ internal const val AppleSongFields =
 data class AppleAlbumSongs(
     val songs: List<AlbumSong>,
     val pub: String,
+    val tallCover: String = "",
+    val motionCover: String = "",
 )
 
 // ── 目录：搜索 / 详情 ──
@@ -250,16 +254,28 @@ suspend fun getAppleAlbumSongs(albumId: String): AppleAlbumSongs {
             // 曲目自己的 relationships 不被顶层 include 覆盖，要单独用**嵌套 include** 点名。
             // 少了它，专辑页每首歌只有合并后的 `artistName`，多歌手就没法逐个选。
             "include[albums:tracks]" to "artists",
-            "extend" to "editorialArtwork,extendedAssetUrls",
+            "extend" to "editorialArtwork,editorialVideo,extendedAssetUrls",
             "l" to _catalogLang(),
         ),
     )
     val album = _map(_list(data["data"]).firstOrNull())
     val attrs = _map(album["attributes"])
     val tracks = _list(_map(_map(album["relationships"])["tracks"])["data"])
+    val motion = _map(attrs["editorialVideo"])
+    val tallMotion = _map(motion["motionDetailTall"])
+        .ifEmpty { _map(motion["motionTallVideo3x4"]) }
+        .ifEmpty { _map(motion["motionSquareVideo1x1"]) }
+        .ifEmpty { _map(motion["motionDetailSquare"]) }
+    val tallArt = _map(_map(attrs["editorialArtwork"])["staticDetailTall"])
     return AppleAlbumSongs(
         songs = tracks.mapNotNull { _albumSongOf(it) },
         pub = _str(attrs["releaseDate"]),
+        tallCover = if (tallArt.isEmpty()) {
+            appleArtworkUrl(attrs["artwork"], AppleHeroWidth, AppleHeroHeight)
+        } else {
+            appleArtworkUrl(tallArt, AppleHeroWidth, AppleHeroHeight)
+        },
+        motionCover = _str(tallMotion["video"]),
     )
 }
 
@@ -269,6 +285,8 @@ data class ApplePlaylist(
     val curator: String,
     val cover: String,
     val songs: List<Song>,
+    val tallCover: String = "",
+    val motionCover: String = "",
 )
 
 /**
@@ -287,17 +305,30 @@ suspend fun getApplePlaylist(playlistId: String): ApplePlaylist {
             // 与专辑同理：曲目自己的 relationships 不被顶层 include 覆盖，要嵌套点名
             "include[playlists:tracks]" to "artists",
             "limit[playlists:tracks]" to "100",
+            "extend" to "editorialArtwork,editorialVideo",
             "l" to _catalogLang(),
         ),
     )
     val item = _map(_list(data["data"]).firstOrNull())
     val attrs = _map(item["attributes"])
     val tracks = _paged(_map(_map(item["relationships"])["tracks"]))
+    val motion = _map(attrs["editorialVideo"])
+    val tallMotion = _map(motion["motionDetailTall"])
+        .ifEmpty { _map(motion["motionTallVideo3x4"]) }
+        .ifEmpty { _map(motion["motionSquareVideo1x1"]) }
+        .ifEmpty { _map(motion["motionDetailSquare"]) }
+    val tallArt = _map(_map(attrs["editorialArtwork"])["staticDetailTall"])
     return ApplePlaylist(
         name = _str(attrs["name"]),
         curator = _str(attrs["curatorName"]),
         cover = _artwork(attrs["artwork"]),
         songs = tracks.mapNotNull(::appleSongOf),
+        tallCover = if (tallArt.isEmpty()) {
+            appleArtworkUrl(attrs["artwork"], AppleHeroWidth, AppleHeroHeight)
+        } else {
+            appleArtworkUrl(tallArt, AppleHeroWidth, AppleHeroHeight)
+        },
+        motionCover = _str(tallMotion["video"]),
     )
 }
 
@@ -571,7 +602,7 @@ private suspend fun _artistProfile(artistId: String): Map<String, Any?> =
             "/v1/catalog/$appleMusicStorefront/artists/$artistId",
             mapOf(
                 "platform" to "web",
-                "extend" to "editorialArtwork,artistBio,plainEditorialNotes",
+                "extend" to "editorialArtwork,editorialVideo,artistBio,plainEditorialNotes",
                 "l" to _catalogLang(),
             ),
         )
@@ -580,6 +611,23 @@ private suspend fun _artistProfile(artistId: String): Map<String, Any?> =
         _artistProfilePayload = data
         data
     }
+
+internal suspend fun fetchAppleArtistMotion(artistId: String): AppleArtistMotion? {
+    val id = _rawAppleId(artistId)
+    if (id.isEmpty()) return null
+    val data = runCatching { _artistProfile(id) }.getOrNull() ?: return null
+    val attrs = _map(_map(_list(data["data"]).firstOrNull())["attributes"])
+    if (attrs.isEmpty()) return null
+    val motion = _map(attrs["editorialVideo"])
+    val video = _str(_map(motion["motionArtistSquare1x1"])["video"])
+        .ifEmpty { _str(_map(motion["motionArtistWide16x9"])["video"]) }
+        .ifEmpty { _str(_map(motion["motionArtistFullscreen16x9"])["video"]) }
+    if (video.isEmpty()) return null
+    return AppleArtistMotion(
+        stillCover = appleArtworkUrl(attrs["artwork"], AppleArtistStillSize, AppleArtistStillSize),
+        motionCover = video,
+    )
+}
 
 suspend fun fetchAppleArtistAvatar(artistId: String, name: String = ""): String {
     val id = _rawAppleId(artistId)
@@ -661,6 +709,13 @@ private suspend fun _search(
     val node = _map(results[resultKey] ?: results[resultKey + "s"] ?: results[resultKey.removeSuffix("s")])
     return _list(node["data"])
 }
+
+internal suspend fun appleApiGet(
+    path: String,
+    params: Map<String, String?> = emptyMap(),
+): Map<String, Any?> = _appleGet(path, params)
+
+internal fun appleCatalogLang(): String = _catalogLang()
 
 private suspend fun _appleGet(path: String, params: Map<String, String?> = emptyMap()): Map<String, Any?> {
     val builder = Uri.parse(APPLE_API + path).buildUpon()
@@ -760,18 +815,26 @@ private fun _albumOf(raw: Any?): Album? {
     if (id.isEmpty()) return null
     val attrs = _map(item["attributes"])
     val art = _artwork(attrs["artwork"])
+    val trackCount = _int(attrs["trackCount"])
+    val isSingle = attrs["isSingle"] as? Boolean == true
     return Album(
         albumid = id,
         name = _str(attrs["name"]).ifEmpty { "未知专辑" },
         artist = _str(attrs["artistName"]).ifEmpty { "未知歌手" },
         platform = MusicPlatform.apple,
-        musiccnt = _int(attrs["trackCount"]).toString(),
+        musiccnt = trackCount.toString(),
         pub = _str(attrs["releaseDate"]),
         pic = art,
         img = art,
         company = _str(attrs["recordLabel"]),
         lang = "",
         vip = "",
+        kind = when {
+            isSingle -> ALBUM_KIND_SINGLE
+            trackCount in 1..6 -> ALBUM_KIND_EP
+            trackCount > 6 -> ALBUM_KIND_ALBUM
+            else -> ""
+        },
     )
 }
 
@@ -791,11 +854,18 @@ private fun _artistOf(raw: Any?): Artist? {
     )
 }
 
-private fun _artwork(raw: Any?): String {
+internal fun appleArtworkUrl(raw: Any?, size: Int = 600): String = appleArtworkUrl(raw, size, size)
+
+internal fun appleArtworkUrl(raw: Any?, width: Int, height: Int): String {
     val url = _str(_map(raw)["url"])
     if (url.isEmpty()) return ""
-    return url.replace("{w}", "600").replace("{h}", "600")
+    return url.replace("{w}", width.toString()).replace("{h}", height.toString())
 }
+
+internal const val AppleHeroWidth = 1440
+internal const val AppleHeroHeight = 1920
+
+private fun _artwork(raw: Any?): String = appleArtworkUrl(raw)
 
 private fun _albumIdFromUrl(url: String): String =
     Regex("""/album/(?:[^/]+/)?(\d+)""").find(url)?.groupValues?.getOrNull(1).orEmpty()

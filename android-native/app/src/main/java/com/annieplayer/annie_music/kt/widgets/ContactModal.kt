@@ -44,32 +44,16 @@ import com.annieplayer.annie_music.kt.ui.theme.AppFontWeight
 import com.annieplayer.annie_music.kt.ui.theme.AppIconSize
 import com.annieplayer.annie_music.kt.ui.theme.AppLineHeight
 import com.annieplayer.annie_music.kt.ui.theme.AppRadius
-import com.annieplayer.annie_music.kt.ui.theme.AppSize
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 import com.annieplayer.annie_music.kt.ui.theme.AnnieTypography
 
-/**
- * 联系我们弹窗（1:1 移植 Flutter `lib/widgets/contact_modal.dart`，
- * 视觉对齐 RN 版 `components/ContactModal.tsx`）。
- *
- * - 自驱动浮层：`visible` 为 true 才渲染（对齐 Dart `if (!visible) return SizedBox.shrink()`）
- * - 居中卡片：标题「联系我们」+ 两张二维码 + 关闭按钮 + 免责声明 / 鸣谢
- * - 返回键：先关大图预览，再关弹窗
- *
- * 资源说明：Dart 用 `Image.asset('assets/group1.jpg' / 'group2.jpg')`。这两个资源尚未
- * 进入 Android 工程（同 HomeScreen 对 `annie.jpg` 的既有约定），故这里直接渲染 Flutter
- * `errorBuilder` 的降级占位（白色 0.06 圆角块 + 破图图标），待资源入库后再替换为图片。
- */
-
-/** 预览关闭按钮的顶部偏移（Dart `top: 50`，无对应刻度，用 44 + 6 组合） */
 private val ContactModalPreviewCloseTop = AppSpacing.sp44 + AppSpacing.sp6
 
-/** 免责声明文案（与 Dart 完全一致） */
 private const val ContactModalDisclaimer =
     "声明：本软件仅供学习交流使用，完全免费，不涉及任何商业用途。所有资源请在下载后24小时内删除。"
 
-/** 鸣谢文案（与 Dart 完全一致） */
-private const val ContactModalThanks = "鸣谢：IKUN MUSIC提供的公益网易解析源"
+private const val ContactModalJoinNote =
+    "请通过安妮播放器扫码入群的用户，在入群问题回答时明确备注入群渠道"
 
 @Composable
 fun ContactModal(
@@ -79,13 +63,11 @@ fun ContactModal(
 ) {
     if (!visible) return
 
-    // 当前放大预览的二维码标签（null 表示未预览）
-    var previewLabel by remember { mutableStateOf<String?>(null) }
+    var previewRes by remember { mutableStateOf<Int?>(null) }
 
-    // 返回键：先关大图预览，再关弹窗（对齐 Dart PopScope）
     BackHandler {
-        if (previewLabel != null) {
-            previewLabel = null
+        if (previewRes != null) {
+            previewRes = null
         } else {
             onClose()
         }
@@ -117,10 +99,30 @@ fun ContactModal(
             ) {
                 Text(text = "联系我们", style = AnnieTypography.sheetTitle)
                 Spacer(modifier = Modifier.height(AppSpacing.sp28))
-                ContactModalQrRow(label = "联系我们①", imageRes = R.drawable.group1, onOpenPreview = { previewLabel = "联系我们①" })
-                Spacer(modifier = Modifier.height(AppSpacing.sp16))
-                ContactModalQrRow(label = "联系我们②", imageRes = R.drawable.group2, onOpenPreview = { previewLabel = "联系我们②" })
-                Spacer(modifier = Modifier.height(AppSpacing.sp28))
+                ContactModalGroupCard(
+                    imageRes = R.drawable.qq_group_annie,
+                    groupName = "安妮播放器专属群",
+                    groupNo = "1128065156",
+                    groupDesc = "需求反馈 / Bug 上报",
+                    onOpenPreview = { previewRes = R.drawable.qq_group_annie },
+                )
+                Spacer(modifier = Modifier.height(AppSpacing.sp12))
+                ContactModalGroupCard(
+                    imageRes = R.drawable.qq_group_hifi,
+                    groupName = "真无损HiFi音乐发烧友群",
+                    groupNo = "1023637098",
+                    groupDesc = "无敌章鱼哥的 HiFi 交流群",
+                    onOpenPreview = { previewRes = R.drawable.qq_group_hifi },
+                )
+                Spacer(modifier = Modifier.height(AppSpacing.sp12))
+                Text(
+                    text = ContactModalJoinNote,
+                    textAlign = TextAlign.Center,
+                    color = AppColors.warning,
+                    fontSize = AppFontSize.xs,
+                    lineHeight = AppLineHeight.body16,
+                )
+                Spacer(modifier = Modifier.height(AppSpacing.sp24))
                 Box(
                     modifier = Modifier
                         .clickableNoRipple(onClose)
@@ -140,28 +142,18 @@ fun ContactModal(
                     textAlign = TextAlign.Center,
                     color = AppColors.white30,
                     fontSize = AppFontSize.xs,
-                    // 行高对齐 Dart `height: 16 / 11`
-                    lineHeight = AppLineHeight.body16,
-                )
-                Spacer(modifier = Modifier.height(AppSpacing.sp6))
-                Text(
-                    text = ContactModalThanks,
-                    textAlign = TextAlign.Center,
-                    color = AppColors.white30,
-                    fontSize = AppFontSize.xs,
-                    // 行高对齐 Dart `height: 16 / 11`
                     lineHeight = AppLineHeight.body16,
                 )
             }
         }
 
         // 大图预览（对齐 Dart rgba(0,0,0,0.92)）
-        previewLabel?.let { label ->
+        previewRes?.let { res ->
             Box(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(AppColors.scrim92)
-                    .clickableNoRipple { previewLabel = null },
+                    .clickableNoRipple { previewRes = null },
             ) {
                 Box(
                     modifier = Modifier
@@ -171,11 +163,8 @@ fun ContactModal(
                     contentAlignment = Alignment.Center,
                 ) {
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        // 大图预览：仅显示实际二维码图片（对齐 Dart Image.asset 大图，无底部文案）
                         Image(
-                            painter = painterResource(
-                                if (label == "联系我们①") R.drawable.group1 else R.drawable.group2,
-                            ),
+                            painter = painterResource(res),
                             contentDescription = null,
                             modifier = Modifier.fillMaxWidth(),
                             contentScale = ContentScale.Fit,
@@ -186,7 +175,7 @@ fun ContactModal(
                     modifier = Modifier
                         .align(Alignment.TopEnd)
                         .padding(top = ContactModalPreviewCloseTop, end = AppSpacing.sp20)
-                        .clickableNoRipple { previewLabel = null }
+                        .clickableNoRipple { previewRes = null }
                         .padding(AppSpacing.sp8),
                 ) {
                     Icon(
@@ -201,39 +190,47 @@ fun ContactModal(
     }
 }
 
-/** 二维码行：80x80 缩略图 + 文案（点击缩略图看大图，对齐 Dart `_qrRow`） */
 @Composable
-private fun ContactModalQrRow(
-    label: String,
+private fun ContactModalGroupCard(
     imageRes: Int,
+    groupName: String,
+    groupNo: String,
+    groupDesc: String,
     onOpenPreview: () -> Unit,
 ) {
-    Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-        Box(
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(AppColors.whiteA06, RoundedCornerShape(AppRadius.r10))
+            .clickableNoRipple(onOpenPreview)
+            .padding(AppSpacing.sp10),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Image(
+            painter = painterResource(imageRes),
+            contentDescription = null,
             modifier = Modifier
-                .clickableNoRipple(onOpenPreview)
-                .size(AppSize.modalInnerBox)
-                .clip(RoundedCornerShape(AppRadius.r10))
-                .background(AppColors.whiteA06),
-            contentAlignment = Alignment.Center,
-        ) {
-            // Dart: ClipRRect + Image.asset('assets/group1.jpg' / 'group2.jpg')（已入库 drawable-nodpi）
-            // 缩放模式对齐 Dart `BoxFit.contain`
-            Image(
-                painter = painterResource(imageRes),
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit,
+                .width(AppSpacing.sp60)
+                .height(AppSpacing.sp60 * 1.3f)
+                .clip(RoundedCornerShape(AppRadius.r6)),
+            contentScale = ContentScale.Fit,
+        )
+        Spacer(modifier = Modifier.width(AppSpacing.sp12))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = groupName,
+                color = AppColors.white,
+                fontSize = AppFontSize.base,
+                fontWeight = AppFontWeight.semiBold,
+            )
+            Spacer(modifier = Modifier.height(AppSpacing.sp4))
+            Text(
+                text = "群号 $groupNo · $groupDesc",
+                color = AppColors.white54,
+                fontSize = AppFontSize.xs,
+                lineHeight = AppLineHeight.body16,
             )
         }
-        Spacer(modifier = Modifier.width(AppSpacing.sp12))
-        Text(
-            text = label,
-            modifier = Modifier.weight(1f),
-            color = AppColors.white70,
-            fontSize = AppFontSize.base,
-            fontWeight = AppFontWeight.medium,
-        )
     }
 }
 

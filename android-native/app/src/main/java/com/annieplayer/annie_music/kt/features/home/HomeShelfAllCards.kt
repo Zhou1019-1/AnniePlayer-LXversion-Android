@@ -46,67 +46,6 @@ import com.annieplayer.annie_music.kt.widgets.clickableRipple
 // 字体与配色统一对齐歌手详情的专辑卡（`SingerDetailAlbumCard`）：
 // 标题 13sp SemiBold / 歌手 xs whiteA40 / 曲目数与发行日期 10sp（white30 + white70 SemiBold）。
 
-/**
- * 首图大卡：整行 16:9，标题压在图上。
- *
- * 用 16:9 而不是 1:1：整行方图高达半屏，会把后面的网格全推出视野，反而失去「一览」的意义。
- */
-@Composable
-internal fun HomeShelfHeroCard(item: HomeItem, onClick: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .aspectRatio(16f / 9f)
-            .clip(RoundedCornerShape(AppRadius.r20))
-            .background(AppColors.whiteA03)
-            .clickableRipple(onClick),
-    ) {
-        HomeShelfCover(item = item, placeholderSize = AppFontSize.size32)
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(
-                    Brush.verticalGradient(
-                        0.38f to Color.Transparent,
-                        1f to Color(0xB3000000),
-                    ),
-                ),
-        )
-        item.badge?.takeIf { it.isNotEmpty() }?.let { badge ->
-            HomeShelfBadge(
-                text = badge,
-                modifier = Modifier
-                    .align(Alignment.TopEnd)
-                    .padding(AppSpacing.sp10),
-            )
-        }
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomStart)
-                .padding(AppSpacing.sp16),
-        ) {
-            Text(
-                text = item.title,
-                color = AppColors.white,
-                fontSize = AppFontSize.size20,
-                fontWeight = AppFontWeight.bold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (item.subtitle.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(AppSpacing.sp4))
-                Text(
-                    text = item.subtitle,
-                    color = AppColors.white.copy(alpha = 0.7f),
-                    fontSize = AppFontSize.size13,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-        }
-    }
-}
-
 /** 网格里的单张卡：方图 + 标题 / 歌手 /（专辑才有）曲目数 · 发行日期。 */
 @Composable
 internal fun HomeShelfAllTile(item: HomeItem, onClick: () -> Unit) {

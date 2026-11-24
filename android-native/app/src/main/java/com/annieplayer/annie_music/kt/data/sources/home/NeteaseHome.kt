@@ -163,7 +163,9 @@ private suspend fun cachedNetease(
     fetch: suspend () -> Map<String, Any?>,
 ): Map<String, Any?>? {
     val key = HomeCachePrefix + "netease:" + suffix
-    cacheService.get<Map<String, Any?>>(key)?.let { return it }
+    if (!homeCacheForceActive()) {
+        cacheService.get<Map<String, Any?>>(key)?.let { return it }
+    }
     val fresh = runCatching { fetch() }.getOrNull() ?: return null
     if (fresh.isNotEmpty()) cacheService.set(key, fresh, HomeCacheTtlMs)
     return fresh

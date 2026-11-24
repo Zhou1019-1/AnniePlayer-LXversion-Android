@@ -140,9 +140,20 @@ object DownloadService {
      * （网易 yrc 与 lrc 实测差 ~8.3s），必须由它统一平移到音频时间轴，
      * 再序列化成 `[行时间]<00:00.000><行时间>词…`，翻译行紧随其后（复用同一行标签）。
      */
-    fun mergeLyrics(lrc: String, tlyric: String?, enhancedLyric: String? = null): String {
+    fun mergeLyrics(
+        lrc: String,
+        tlyric: String?,
+        enhancedLyric: String? = null,
+        /**
+         * 强制使用增强（逐字）格式，忽略全局「写逐字歌词」设置。
+         *
+         * 下载时读设置是对的（那是用户的长期偏好）；但「导入元数据」里用户已经**显式选了**
+         * 逐字/逐行，这时再被全局开关拦住就会出现「选了逐字、导进来是逐行」。
+         */
+        forceEnhanced: Boolean = false,
+    ): String {
         val enhanced = enhancedLyric?.takeIf {
-            it.isNotEmpty() && MoreSettings.writeEnhancedLyrics.value
+            it.isNotEmpty() && (forceEnhanced || MoreSettings.writeEnhancedLyrics.value)
         }
         if (enhanced != null) {
             return _toEnhancedLrc(parseLrcWithTranslation(lrc, tlyric, enhanced))
@@ -280,8 +291,11 @@ object DownloadService {
         var isrcValue: String? = isrc
         var versionValue: String? = version
         var copyrightValue: String? = copyright
-        // Qobuz 的 `Song` 现在自己就带全了（isrc / version / copyright），
+        // Qobuz 的 `Song` 现在自己都带全了（isrc / version / copyright），
         // 只有真缺字段时才去补一次 track 详情 —— 省掉每首一次网络请求。
+        //
+        // 其它平台的版权由**编排层**补（`DownloadOrchestrator` 调 `fetchAlbumCopyright`）：
+        // 那里才知道 albumId，也才能一次把版权跟别的 enrich 结果合起来。
         if (songId.startsWith("qobuz:") &&
             (isrcValue == null || versionValue == null || copyrightValue == null)
         ) {

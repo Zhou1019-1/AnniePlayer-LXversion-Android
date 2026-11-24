@@ -25,7 +25,6 @@ import com.annieplayer.annie_music.kt.data.model.Song
 import com.annieplayer.annie_music.kt.data.sources.kuwo.buildAlbumCoverUrl
 import com.annieplayer.annie_music.kt.features.downloads.DownloadOrchestrator
 import com.annieplayer.annie_music.kt.features.search.HomeForeignLinkView
-import com.annieplayer.annie_music.kt.features.search.HomePendingDownloadBar
 import com.annieplayer.annie_music.kt.features.search.SearchScreenState
 import com.annieplayer.annie_music.kt.ui.theme.AppSize
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
@@ -44,10 +43,12 @@ import com.annieplayer.annie_music.kt.widgets.SongSearchResults
 // 属于「主页的一种形态」，不是独立页面：没有自己的背景、顶栏、返回处理。
 // 由 `HomeScreen` 在 `homeSearchExpanded = true` 时淡入，`false` 时淡出并移除。
 //
-// 内部三块（自上而下）：
+// 内部两块（自上而下）：
 //   ① 搜索行   ← 与主页态的「孤立放大镜」共用同一个右内边距 / 行高，见 HomeScreen 的注释
-//   ② 待下载条 ← 只在单选模式且已勾选歌曲时出现
-//   ③ 结果区   ← 按 [ModeDropdownMode] 分派到四个结果视图
+//   ② 结果区   ← 按 [ModeDropdownMode] 分派到四个结果视图
+//
+// 多选的「清空 / 已选 N 首 / ⇉」不在这一层：它挂在顶栏标题行右端（见 `HomeTopBar`），
+// 与搜索框右端的放大镜同一列。
 //
 // 所有状态都来自 [SearchScreenState]（在 `AppShell` 里 `remember(scope)` 持有），
 // 所以「主页 → 搜索 → 主页」来回切不会丢输入内容与结果数据。
@@ -59,7 +60,6 @@ import com.annieplayer.annie_music.kt.widgets.SongSearchResults
  * @param st 搜索态状态机（查询、结果、分页、模式）。
  * @param dl 下载编排（待下载条与行内下载入口）。
  * @param uiViewModel 详情跳转（点专辑 / 歌手时压 `pageStack`）。
- * @param selectionViewModel 多选集合。
  * @param selection 多选状态快照。
  * @param downloadTasks 行内下载状态。
  * @param currentSong 当前播放歌曲（用于结果行的高亮）。
@@ -69,7 +69,6 @@ internal fun HomeSearchPanel(
     st: SearchScreenState,
     dl: DownloadOrchestrator,
     uiViewModel: UiViewModel,
-    selectionViewModel: SearchSelectionViewModel,
     selection: SelectionState,
     downloadTasks: Map<String, DownloadTask>,
     currentSong: Song?,
@@ -102,19 +101,15 @@ internal fun HomeSearchPanel(
                     onSelect = { handleModeSelect(it) },
                 )
                 Spacer(modifier = Modifier.width(AppSpacing.sp8))
-                if (mode != ModeDropdownMode.qobuz) {
-                    SearchBarField(
-                        value = queryText,
-                        onValueChange = { queryText = it },
-                        onSubmit = { handleSearch() },
-                        modifier = Modifier.weight(1f),
-                        horizontalPadding = 0.dp,
-                        verticalPadding = 0.dp,
-                        height = AppSize.detailDownloadBarHeight,
-                    )
-                } else {
-                    Spacer(modifier = Modifier.weight(1f))
-                }
+                SearchBarField(
+                    value = queryText,
+                    onValueChange = { queryText = it },
+                    onSubmit = { handleSearch() },
+                    modifier = Modifier.weight(1f),
+                    horizontalPadding = 0.dp,
+                    verticalPadding = 0.dp,
+                    height = AppSize.detailDownloadBarHeight,
+                )
                 if (showAppleCountry) {
                     Spacer(modifier = Modifier.width(AppSpacing.sp8))
                     AppleCountryButton(
@@ -129,18 +124,7 @@ internal fun HomeSearchPanel(
                 }
             }
 
-            // ── ② 待下载条 ──
-            if (mode == ModeDropdownMode.song && selection.selectedSongs.isNotEmpty()) {
-                HomePendingDownloadBar(
-                    count = selection.selectedSongs.size,
-                    batchDownloading = dl.batchDownloading,
-                    onView = { selectionViewModel.setOverlayVisible(true) },
-                    onClear = { selectionViewModel.clearAll() },
-                    onBatch = { dl.openBatchPicker() },
-                )
-            }
-
-            // ── ③ 结果区 ──
+            // ── ② 结果区 ──
             Box(modifier = Modifier.weight(1f)) {
                 when (mode) {
                     ModeDropdownMode.song -> SongSearchResults(
@@ -195,11 +179,6 @@ internal fun HomeSearchPanel(
                             )
                         },
                         isLoading = artistsLoading,
-                    )
-
-                    ModeDropdownMode.qobuz -> HomeForeignLinkView(
-                        onQobuzSubmit = { handleQobuzSubmit(it) },
-                        onKkboxSubmit = { handleKkboxSubmit(it) },
                     )
                 }
             }

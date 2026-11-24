@@ -46,7 +46,6 @@ import com.annieplayer.annie_music.kt.core.audio.DSD_PCM_RATES
 import com.annieplayer.annie_music.kt.core.audio.DSD_RATE_FOLLOW_SYSTEM
 import com.annieplayer.annie_music.kt.core.audio.DsdLevel
 import com.annieplayer.annie_music.kt.core.audio.DsdOutputMode
-import com.annieplayer.annie_music.kt.core.audio.dsdModeAvailability
 import com.annieplayer.annie_music.kt.core.audio.khzText
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppDuration
@@ -59,14 +58,14 @@ import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 /**
  * 「DSD 输出」整页面板。
  *
- * 为什么单独开一页而不是塞进更多设置：这三件事（模式 / 目标率 / 为什么 DoP 是灰的）
+ * 为什么单独开一页而不是塞进更多设置：这三件事（模式 / 目标率 / DoP 与 Native 的前提）
  * 是一条**独立的轴**，和「透明 vs 调音」「输出方式」正交。塞进设置列表会和
  * 「重采样目标」长得一模一样，反而更容易被误读成同一件事 —— 而这正是要消除的误解。
  *
  * 页内三段，顺序就是判读顺序：
  *
- * 1. **DSD 模式** —— 现在只有 `PCM` 可选；`DoP` / `Native` 灰显并写明缺什么
- *    （判定在 `dsdModeAvailability`，本页只负责呈现，不做判断）；
+ * 1. **DSD 模式** —— 三选一，**都可选**。模式是意愿，能不能生效由运行时按实测通路裁决
+ *    （`dsd/DsdTransportPlan.kt` 的 `resolveDsdChain`），本页只呈现 `DsdOutputMode.note`；
  * 2. **DSD 转 PCM** —— 按 DSD 档位分别选目标率，候选只有 44.1 家族，
  *    超出平台能力的档位灰显；
  * 3. **说明** —— 只读，把"为什么"和"当前实际走了什么"摆出来。
@@ -86,13 +85,6 @@ fun DsdOutputSheet(
      * 只作用于 [currentLevel] 那一行：其它档位此刻没有"实际"，不该显示。
      */
     currentRateNotice: String? = null,
-    /**
-     * 当前通路能否**逐字节保真**（USB 直连成立）。DoP 与 Native 的硬前提：
-     * 过一次 mixer，`STREAM_MUSIC` 的音量就是一次 float 乘法，DoP 的帧标记就在被乘的位上。
-     */
-    exclusiveReady: Boolean = false,
-    /** DAC 是否暴露了 raw DSD 通道。Native 的硬前提，未知时那一项灰着 */
-    usbDacReady: Boolean = false,
     /** 当前是否蓝牙输出：蓝牙下 DSD 档会让位给 codec 率 */
     isBluetooth: Boolean = false,
     /** 系统 mixer 实际会用的率；0 = 未知。给「跟随系统」那一项显示目标用 */
@@ -201,20 +193,13 @@ fun DsdOutputSheet(
                 DsdModeTabs(
                     mode = mode,
                     onPick = onPickMode,
-                    exclusiveReady = exclusiveReady,
-                    usbDacReady = usbDacReady,
                 )
-                // 灰项的原因塞不进行内（一行只有一两个词），挪到这里一行小字 + 「说明」区详述
-                val blocked = DsdOutputMode.entries
-                    .filter { !dsdModeAvailability(it, exclusiveReady, usbDacReady).enabled }
-                if (blocked.isNotEmpty()) {
+                // 三选一都能点：模式是意愿，"能不能生效"由运行时裁决并在「说明」区报出结论。
+                // 灰掉模式的代价是用户连选都选不了，也就永远看不到"为什么没生效"。
+                val note = mode.note
+                if (note.isNotEmpty()) {
                     Spacer(modifier = Modifier.height(AppSpacing.sp8))
-                    DsdHint(
-                        blocked.joinToString(" / ") { it.label } + " 现在选不了，会落回 PCM：" +
-                            blocked.joinToString("；") {
-                                dsdModeAvailability(it, exclusiveReady, usbDacReady).reason
-                            },
-                    )
+                    DsdHint(note)
                 }
 
                 Spacer(modifier = Modifier.height(AppSpacing.sp12))
@@ -274,10 +259,11 @@ fun DsdOutputSheet(
                 // 档位是意图，不会因设备变化被改掉 —— 不说清用户会以为"拔一次线设置就丢了"
                 DsdHint("档位不会因换设备丢失，条件恢复后自动生效。")
                 Spacer(modifier = Modifier.height(AppSpacing.sp8))
-                // DoP / Native 为什么不可选：`DsdModeTabs` 只写「未实现」，机制由这里给
-                DsdHint("DoP 需逐字节保真，系统混音会改写帧标记，只能走独占。")
+                // 模式都能选，所以要在这里说清「什么时候才真的生效」——
+                // 否则用户会以为选了就一定在听 DoP。
+                DsdHint("DoP / Native 生效的前提：一条逐字节保真的通路（USB 独占、DAP 内置 DAC 直通）。")
                 Spacer(modifier = Modifier.height(AppSpacing.sp8))
-                DsdHint("Native 需独占且 DAC 支持 Native DSD；系统 API 建不出 UAC2 这条流。")
+                DsdHint("不满足时逐级回落，播放页显示的是实际生效的那一级；设置里的选择不会被改写。")
                 // 底部留白避开迷你播放条
                 Spacer(modifier = Modifier.height(AppSpacing.sheetBottomInset))
             }
@@ -343,8 +329,6 @@ private fun DsdCurrentHint(
 private fun DsdModeTabs(
     mode: DsdOutputMode,
     onPick: (DsdOutputMode) -> Unit,
-    exclusiveReady: Boolean,
-    usbDacReady: Boolean,
 ) {
     Row(
         modifier = Modifier
@@ -354,7 +338,6 @@ private fun DsdModeTabs(
         horizontalArrangement = Arrangement.spacedBy(4.dp),
     ) {
         for (m in DsdOutputMode.entries) {
-            val availability = dsdModeAvailability(m, exclusiveReady, usbDacReady)
             val active = m == mode
             Column(
                 modifier = Modifier
@@ -364,7 +347,7 @@ private fun DsdModeTabs(
                         if (active) AppColors.primaryA15 else AppColors.whiteA03,
                         RoundedCornerShape(10.dp),
                     )
-                    // **可点**：模式是"意愿"，能不能生效由实际链路决定（降级是事实，
+                    // **都可点**：模式是"意愿"，能不能生效由实际链路决定（降级是事实，
                     // 不写回设置）。以前 `enabled=false` 时直接吞掉点击，用户连选都选不了，
                     // 也就永远看不到"为什么没生效"——那正好把最需要解释的情况藏起来了。
                     .clickableNoRipple { onPick(m) },
@@ -373,21 +356,9 @@ private fun DsdModeTabs(
             ) {
                 Text(
                     text = m.label,
-                    color = when {
-                        active -> AppColors.primary
-                        availability.enabled -> AppColors.textSecondary
-                        else -> AppColors.textDisabled
-                    },
+                    color = if (active) AppColors.primary else AppColors.textSecondary,
                     fontSize = AppFontSize.size13,
                     fontWeight = if (active) FontWeight.Medium else FontWeight.Normal,
-                )
-                // 固定占一行高度，这样三个格子高度一致、不会因为一行字跳动。
-                // **不写"未实现"**：两条通路都做完了，能不能生效取决于通路与设备，
-                // 那由下面那行提示逐条说明，格子里只标"要额外条件"。
-                Text(
-                    text = if (availability.enabled) "" else "需 USB 直连",
-                    color = AppColors.textDisabled,
-                    fontSize = 10.sp,
                 )
             }
         }

@@ -62,6 +62,17 @@ class FavoriteViewModel : ViewModel() {
     fun toggleSong(song: Song): Boolean = FavoriteStore.toggleSong(song).also { reload() }
 
     /**
+     * 幂等取消收藏（「我喜欢」列表行尾的斜杠爱心用它）。
+     *
+     * 不用 [toggleSong]：那一页每行必然已收藏，但连点两下会把歌重新加回来
+     * （第二次 toggle = 加），用户看到的是「删掉的歌又回来了」。
+     */
+    fun unlikeSong(song: Song) {
+        FavoriteStore.removeSong(FavoriteKeys.song(song))
+        reload()
+    }
+
+    /**
      * 收藏 / 取消收藏一张专辑。
      *
      * [paths] 只有本地专辑才需要（键失联时靠它找回，见 `FavoriteSelfHeal`）。
@@ -274,6 +285,10 @@ class FavoriteViewModel : ViewModel() {
 
     fun addSongToUserPlaylist(playlistId: String, song: Song): Boolean =
         FavoriteStore.addSongToUserPlaylist(playlistId, song).also { if (it) reload() }
+
+    /** 批量加入（多选「加入到歌单」）：一次写库 + 一次 reload */
+    fun addSongsToUserPlaylist(playlistId: String, songs: List<Song>): Int =
+        FavoriteStore.addSongsToUserPlaylist(playlistId, songs).also { if (it > 0) reload() }
 
     fun removeSongFromUserPlaylist(playlistId: String, song: Song) {
         FavoriteStore.removeSongFromUserPlaylist(playlistId, song.id, song.platform)

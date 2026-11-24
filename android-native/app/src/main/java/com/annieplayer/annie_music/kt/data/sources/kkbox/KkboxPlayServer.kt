@@ -61,15 +61,15 @@ object KkboxPlayServer {
     private const val CHUNK = 256 * 1024L
 
     /**
-     * 顺序预读的前瞻**时长**（秒），与 ExoPlayer 的 `maxBufferMs = 30_000` 对齐。
+     * **后台会话**的顺序预读前瞻时长（秒），与 ExoPlayer 的 `maxBufferMs = 30_000` 对齐。
      *
      * 按时间而不是字节，是因为 `DefaultLoadControl` 本身也按时间算：固定字节数在不同
      * 档位上完全不等价 —— Hi-Res 里 1.14 Mbps 的 4MB ≈ 29 秒，而 6.4 Mbps 的大长曲
      * （一二百 MB）4MB 只有 7 秒，播放器半秒读穿就卡。
      *
-     * **不整首下完**：其他平台（网易/QQ/Apple/Qobuz）走 `CacheDataSource`，加载量由
-     * ExoPlayer 的 `LoadControl` 决定 —— 播放点之后保持约 30 秒、到上限就停止请求。
-     * 这里保持同一个窗口，行为和缓存形态才一致。
+     * **前台会话不受这个窗口限制**：正在播的那一首一路补到文件末尾（用户要求「尽力缓存整首」），
+     * 切走之后（降级为后台）才回落到这个窗口、并且已经发出的请求会立刻中止 ——
+     * 否则「100MB 的歌听到一半切走，旧会话还在全速拉剩下的 60MB」会把新歌的首包挤到超时。
      */
     private const val AHEAD_SECONDS = 30L
 
@@ -539,14 +539,15 @@ object KkboxPlayServer {
         }
 
         /**
-         * 顺序预读：只把播放位置之后 [AHEAD_SECONDS] 秒填满，不做整首下载。
+         * 顺序预读。
          *
-         * 这个窗口和其他平台的 `CacheDataSource` + `LoadControl` 完全等价：
-         * 播放推进 → 窗口跟着滑动 → 听完一首自然整首都在磁盘（`.done`），
-         * 暂停/切歌后就不再往前拉。
+         * **前台会话：一路补到文件末尾**（不再有 30 秒窗口）—— 正在播的那一首听完时整首
+         * 都在磁盘上，暂停/后台也算「已经付过的流量」。
+         * **后台会话：保持 [AHEAD_SECONDS] 窗口**，并且一降级就中止在途请求，
+         * 把带宽让给新歌（否则切歌后新歌首包会被旧歌的剩余几十 MB 挤到超时）。
          *
-         * 一次请求拉满整个窗口而不是逐块：单块 256KB 实测要 1.4 秒，其中绝大部分是首包
-         * 延迟，分十几次请求就是二十秒；一次拉完只付一个 TTFB。
+         * 一次请求拉满整段而不是逐块：单块 256KB 实测要 1.4 秒，其中绝大部分是首包延迟，
+         * 分十几次请求就是二十秒；一次拉完只付一个 TTFB。
          */
         private suspend fun prefetchLoop() {
             while (true) {
@@ -562,21 +563,22 @@ object KkboxPlayServer {
                     delay(300)
                     continue
                 }
-                // 窗口：只填 [servedPos, servedPos + readahead]；切走（后台）时窗口冻结在这一刻
-                if (from > servedPos + readaheadBytes()) {
+                // 只有后台会话受窗口限制；前台整首补满
+                if (!foreground && from > servedPos + readaheadBytes()) {
                     delay(60)
                     continue
                 }
+                val wholeFile = foreground
                 runCatching {
-                    val span = readaheadBytes()
+                    val span = if (wholeFile) totalBytes - from else readaheadBytes()
                     val to = minOf(totalBytes - 1, from + span - 1)
                     val anchor = from
                     streamSource(from, to, null) {
                         // 已切走（降级为后台）：立刻撒手，把带宽让给新歌。
                         // 新会话此时 servedPos 还是 0，不会误伤自己。
                         (!foreground && servedPos > 0) ||
-                            // 用户拖了进度条：这一段已经没意义
-                            (foreground && Math.abs(servedPos - anchor) > span * 2)
+                            // 用户拖了进度条：这一段已经没意义（整首补满时不中止 —— 整首都要）
+                            (!wholeFile && Math.abs(servedPos - anchor) > span * 2)
                     }
                 }
                 delay(5)

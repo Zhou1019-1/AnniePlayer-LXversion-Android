@@ -25,7 +25,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
@@ -62,6 +61,8 @@ import com.annieplayer.annie_music.kt.data.sources.apple.wrapper.AppleWrapperApi
 import com.annieplayer.annie_music.kt.data.sources.apple.wrapper.AppleWrapperRegistry
 import com.annieplayer.annie_music.kt.data.sources.apple.wrapper.parseWrapperUrl
 import com.annieplayer.annie_music.kt.ui.theme.AppBorder
+import androidx.compose.ui.res.painterResource
+import com.annieplayer.annie_music.kt.R
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppDuration
 import com.annieplayer.annie_music.kt.ui.theme.AppEasing
@@ -222,9 +223,9 @@ fun AppleServiceSheet(
                         .padding(AppSpacing.sp4),
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Add,
+                        painter = painterResource(R.drawable.ic_action_add),
                         contentDescription = "添加 Wrapper 地址",
-                        tint = AppColors.primary,
+                        tint = AppColors.white,
                         modifier = Modifier.size(AppIconSize.icon24),
                     )
                 }
@@ -343,8 +344,7 @@ fun AppleServiceSheet(
                     }
                     Spacer(Modifier.height(AppSpacing.sp8))
                     Text(
-                        text = "由 WrapperLite 应用托管：先在那边登录 Apple ID 并启动服务，" +
-                            "这里检测通过后即可使用。App 直连端口是 12341，12340 仅给网页工具用。",
+                        text = "WrapperLite 需保持运行并已登录 Apple ID，检测通过即可使用。",
                         color = AppColors.white54,
                         fontSize = AppFontSize.sm,
                     )

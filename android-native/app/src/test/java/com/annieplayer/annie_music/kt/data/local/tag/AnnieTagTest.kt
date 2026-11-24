@@ -414,6 +414,93 @@ class AnnieTagTest {
         publish("w-dff.dff", file)
     }
 
+    /**
+     * 连着写两次：第二次必须**整体替换**旧的 `ID3 ` chunk。
+     *
+     * 曾经的实现按 payload 起点截断，会留下 12 字节残渣头（老 id + 老 size）再追加新 chunk，
+     * 于是第二次写之后 `locateDffId3` 命中残渣，读回的是垃圾 —— 症状是「歌词写进去了，
+     * 再进编辑页什么都没有」。
+     */
+    @Test
+    fun dff_write_twice_replaces_chunk_and_reads_latest_tags() {
+        val file = synthDff(audioBytes = 4096)
+        val before = file.readBytes()
+
+        assertTrue(AnnieTag.write(file, TagBag.of(TagKey.Title to "A")).ok)
+        assertTrue(AnnieTag.write(file, TagBag.of(TagKey.Lyric to "[00:01.00]second")).ok)
+
+        val bag = AnnieTag.read(file)
+        assertNotNull("DFF 第二次写后读不出", bag)
+        assertEquals("第一次写的字段要保留", "A", bag!![TagKey.Title])
+        assertEquals("第二次写的歌词要读得回来", "[00:01.00]second", bag[TagKey.Lyric])
+
+        val after = file.readBytes()
+        assertPrefix("DFF 音频被搬动了", before.copyOfRange(16, before.size), after.copyOfRange(16, after.size))
+        assertEquals("FRM8 长度没回填", after.size - 12L, u64be(after, 4))
+        assertEquals("文件尾只该有一个 ID3 chunk", 1, countDffId3Chunks(after))
+        publish("w-dff-twice.dff", file)
+    }
+
+    /** 按 DSDIFF chunk 结构数 `ID3 ` 头（不靠字符串搜索，音频里可能碰巧出现那四个字节） */
+    private fun countDffId3Chunks(bytes: ByteArray): Int {
+        var pos = 16L
+        var n = 0
+        val end = bytes.size.toLong()
+        while (pos + 12 <= end) {
+            val at = pos.toInt()
+            val id = String(bytes, at, 4, Charsets.ISO_8859_1)
+            val size = u64be(bytes, at + 4)
+            if (id == "ID3 ") n++
+            val next = pos + 12 + size + (size % 2)
+            if (next <= pos || next > end) break
+            pos = next
+        }
+        return n
+    }
+
+    private fun u64be(buf: ByteArray, off: Int): Long {
+        var v = 0L
+        for (i in 0 until 8) v = (v shl 8) or (buf[off + i].toLong() and 0xFF)
+        return v
+    }
+
+    /**
+     * 所有**能写**的格式：连续写两次，第二次的歌词必须读得回来，第一次写的字段不能丢。
+     *
+     * 起因是 DFF 的截断点算错（按 payload 起点而不是 chunk 起点）：第一次写看不出来，
+     * 第二次起文件尾部多出 12 字节残渣，读回来的是垃圾。其它格式各走自己的原地写通道，
+     * 这条测试把「写两次」这个共同不变量一次钉住，免得以后再冒出同一类问题。
+     */
+    @Test
+    fun write_twice_keeps_latest_lyric_on_every_format() {
+        val targets = mutableListOf<Pair<String, File>>()
+        for (name in listOf(
+            "fix.mp3", "fix.flac", "fix.m4a", "fix.ogg", "fix.opus",
+            "fix.wav", "fix.aiff", "fix.wv", "fix.tta",
+        )) {
+            targets += name to fixture(name)
+        }
+        targets += "synth.dsf" to synthDsf(audioBytes = 2048)
+        targets += "synth.dff" to synthDff(audioBytes = 2048)
+
+        for ((name, file) in targets) {
+            assertTrue(
+                "$name 第一次写失败",
+                AnnieTag.write(file, TagBag.of(TagKey.Title to "Keep Me")).ok,
+            )
+            assertTrue(
+                "$name 第二次写失败",
+                AnnieTag.write(file, TagBag.of(TagKey.Lyric to "[00:01.00]second-$name")).ok,
+            )
+
+            val bag = AnnieTag.read(file)
+            assertNotNull("$name 两次写后读不出", bag)
+            assertEquals("$name 第二次写的歌词没读回来", "[00:01.00]second-$name", bag!![TagKey.Lyric])
+            assertEquals("$name 第一次写的标题被丢了", "Keep Me", bag[TagKey.Title])
+            publish("twice-$name", file)
+        }
+    }
+
     /** 造一个最小合法 DSF：DSD(28) + fmt(52) + data(12+N)。 */
     private fun synthDsf(audioBytes: Int): File {
         val audio = ByteArray(audioBytes) { (it % 251).toByte() }

@@ -70,5 +70,6 @@ android-native/native/ffmpeg/prefix*/
 #   *.txt|*.html      各平台 URL / 音质 / 电台接口的响应样本，证据而非源码
 # 真正有测试价值的两个已转正为夹具（app/src/test/resources/fixtures/kuwo_*.xml）。
 android-native/.probe-backup/
+_scr/
 
 

@@ -25,7 +25,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Search
@@ -54,6 +53,8 @@ import com.annieplayer.annie_music.kt.core.state.QobuzViewModel
 import com.annieplayer.annie_music.kt.data.model.QobuzToken
 import com.annieplayer.annie_music.kt.data.sources.qobuz.checkToken
 import com.annieplayer.annie_music.kt.ui.theme.AppBorder
+import androidx.compose.ui.res.painterResource
+import com.annieplayer.annie_music.kt.R
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppDuration
 import com.annieplayer.annie_music.kt.ui.theme.AppEasing
@@ -346,9 +347,9 @@ private fun QobuzTokenSheetHeader(
                 .padding(AppSpacing.sp4),
         ) {
             Icon(
-                imageVector = Icons.Default.Add,
+                painter = painterResource(R.drawable.ic_action_add),
                 contentDescription = "添加 Token",
-                tint = AppColors.primary,
+                tint = AppColors.white,
                 modifier = Modifier.size(AppIconSize.icon24),
             )
         }

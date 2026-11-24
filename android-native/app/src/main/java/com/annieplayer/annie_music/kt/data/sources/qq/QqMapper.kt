@@ -63,7 +63,10 @@ fun mapQQSong(s: Map<String, Any?>): Song {
         tlyric = null,
         qualities = qual,
         qualitySizes = qqQualitySizes(s),
-        albumArtist = artist,
+        // **不要**把曲目艺人串塞进专辑艺术家：搜索接口根本不返回专辑艺人，
+        // 编一个值会让「导入元数据」把 `A / B` 写进 album_artist，也会让专辑分组错位。
+        // 需要时由专辑详情补（见 `applyAlbumDetail`）。
+        albumArtist = null,
         artistNames = artistNames,
         artistIds = artistIds,
         mediaMid = qqMediaMid(s),
@@ -127,6 +130,36 @@ internal fun qqMapSearchSongs(raw: Any?): List<Song> {
         .map { mapQQSong(qqNormMap(it)) }
 }
 
+private val _qqEmTag = Regex("</?em>", RegexOption.IGNORE_CASE)
+
+/** 剥掉搜索高亮标签（QQ 搜索的 `singer` / `title` 会夹 `<em>`），再解一次 HTML 实体。 */
+internal fun qqCleanHighlight(raw: String): String =
+    decodeHtmlEntities(raw.replace(_qqEmTag, ""))
+
+private fun _qqSingerNames(node: Any?): List<String> = when (node) {
+    is List<*> -> node.filterIsInstance<Map<*, *>>()
+        .map { row -> asText(firstTruthy(listOf(row["name"], row["title"]))) }
+        .filter { it.isNotBlank() }
+    is Map<*, *> -> listOf(asText(firstTruthy(listOf(node["name"], node["title"]))))
+        .filter { it.isNotBlank() }
+    is String -> listOf(node).filter { it.isNotBlank() }
+    else -> emptyList()
+}
+
+/**
+ * 专辑歌手。**专辑搜索**（`item_album`）的 `singer` 是字符串、真正的数组在 `singer_list`，
+ * 而歌手专辑（`fcg_v8_singer_album`）给的是 `singer` 数组 —— 两种形态都要认。
+ */
+private fun _qqAlbumArtist(m: Map<String, Any?>): String =
+    listOf(
+        _qqSingerNames(m["singer_list"]),
+        _qqSingerNames(m["singer"]),
+        _qqSingerNames(m["singerName"]),
+        _qqSingerNames(m["singer_name"]),
+    ).firstOrNull { it.isNotEmpty() }
+        .orEmpty()
+        .joinToString(" / ") { qqCleanHighlight(it) }
+
 /** QQ 专辑原始条目 → [Album] */
 internal fun qqMapAlbums(raw: Any?): List<Album> {
     val list = if (raw is List<*>) raw else emptyList<Any?>()
@@ -136,25 +169,14 @@ internal fun qqMapAlbums(raw: Any?): List<Album> {
         val mid = asText(
             firstTruthy(listOf(m["albumMID"], m["albumMid"], m["albummid"], m["mid"])),
         )
-        val singerArr = m["singer"]
-        val singerName = if (
-            singerArr is List<*> && singerArr.isNotEmpty() && singerArr.first() is Map<*, *>
-        ) {
-            val s0 = singerArr.first() as Map<*, *>
-            firstTruthy(listOf(s0["name"], s0["title"]))
-        } else {
-            null
-        }
         val picRaw = asText(m["pic"])
         // 曲目数两条链路位置不同：专辑搜索在 song_count，歌手专辑在 latest_song.song_count
         val latestSong = qqToMap(m["latest_song"])
         out.add(
             Album(
                 albumid = mid,
-                name = decodeHtmlEntities(asText(firstTruthy(listOf(m["albumName"], m["name"])))),
-                artist = decodeHtmlEntities(
-                    asText(firstTruthy(listOf(m["singerName"], singerName))),
-                ),
+                name = qqCleanHighlight(asText(firstTruthy(listOf(m["albumName"], m["name"])))),
+                artist = _qqAlbumArtist(m),
                 platform = MusicPlatform.qq,
                 musiccnt = qqOr(
                     firstTruthy(
@@ -199,7 +221,7 @@ internal fun qqMapArtists(raw: Any?): List<Artist> {
         out.add(
             Artist(
                 id = asText(firstTruthy(listOf(m["singerMID"], m["mid"]))),
-                name = decodeHtmlEntities(asText(firstTruthy(listOf(m["singerName"], m["name"])))),
+                name = qqCleanHighlight(asText(firstTruthy(listOf(m["singerName"], m["name"])))),
                 picture = asText(firstTruthy(listOf(m["singerPic"], m["pic"]))),
                 musicNum = if (numSongs is Number) numSongs.toInt() else 0,
             ),

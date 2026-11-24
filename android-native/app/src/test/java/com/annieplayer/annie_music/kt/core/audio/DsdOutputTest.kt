@@ -176,28 +176,23 @@ class DsdOutputTest {
     }
 
     @Test
-    fun `没有独占通路时 DoP 与 Native 不可选且给出原因`() {
-        val pcm = dsdModeAvailability(DsdOutputMode.pcm)
-        assertTrue(pcm.enabled)
-
-        val dop = dsdModeAvailability(DsdOutputMode.dop)
-        assertFalse(dop.enabled)
-        assertTrue(dop.reason.isNotEmpty())
-
-        val native = dsdModeAvailability(DsdOutputMode.native)
-        assertFalse(native.enabled)
-        assertTrue(native.reason.isNotEmpty())
-
-        // 独占就绪后 DoP 放开；Native 还要 DAC 支持
-        assertTrue(dsdModeAvailability(DsdOutputMode.dop, exclusiveReady = true).enabled)
-        assertFalse(dsdModeAvailability(DsdOutputMode.native, exclusiveReady = true).enabled)
-        assertTrue(
-            dsdModeAvailability(
-                DsdOutputMode.native,
-                exclusiveReady = true,
-                usbDacReady = true,
-            ).enabled,
-        )
+    fun `三种 DSD 模式都可选——能不能生效由运行时裁决`() {
+        // 设置层只表达意愿：灰掉模式的代价是用户连选都选不了，也就永远看不到
+        // "为什么没生效"。判据在 `resolveDsdChain`（实测通路 + 设备能力），
+        // 结论通过 `AudioStatus.dsdTransport` 上报，播放页显示的是实际生效的那一级。
+        for (m in DsdOutputMode.entries) {
+            assertTrue(m.label.isNotEmpty())
+        }
+        // PCM 无前提；DoP / Native 的前提必须写出来，否则选了会以为在听 DoP
+        assertTrue(DsdOutputMode.pcm.note.isEmpty())
+        assertTrue(DsdOutputMode.dop.note.isNotEmpty())
+        assertTrue(DsdOutputMode.native.note.isNotEmpty())
+        // 持久化键不因加字段而变化（老用户的设置必须还能读回）
+        assertEquals(DsdOutputMode.pcm, DsdOutputMode.fromKey("pcm"))
+        assertEquals(DsdOutputMode.dop, DsdOutputMode.fromKey("dop"))
+        assertEquals(DsdOutputMode.native, DsdOutputMode.fromKey("native"))
+        assertEquals(DsdOutputMode.pcm, DsdOutputMode.fromKey("unknown"))
+        assertEquals(DsdOutputMode.pcm, DsdOutputMode.fromKey(null))
     }
 
     @Test

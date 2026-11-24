@@ -47,7 +47,7 @@ class AudioTextTest {
         tier: OutputTier? = null,
         /** 我方这一首**实际**做了采样率转换 */
         didResample: Boolean = false,
-        effectivePath: OutputPath = OutputPath.systemMix,
+        effectivePath: SinkKind = SinkKind.audioTrack,
         dsdTransport: com.annieplayer.annie_music.kt.core.audio.dsd.DsdTransport =
             com.annieplayer.annie_music.kt.core.audio.dsd.DsdTransport.pcm,
         dsdTargetRate: Int = 0,
@@ -443,7 +443,7 @@ class AudioTextTest {
             deliveredRate = 44_100,
             deliveredDepth = 24,
             nativeRate = 48_000,
-            effectivePath = OutputPath.usbDirect,
+            effectivePath = SinkKind.usbUac,
             tier = OutputTier.bitPerfect,
         )
         assertEquals("扬声器 · Bit Perfect · 24 Bit / 44.1 kHz", outputPillText(s))
@@ -550,7 +550,7 @@ class AudioTextTest {
             sourceDepth = 1,
             deliveredRate = 176_400,
             deliveredDepth = 24,
-            effectivePath = OutputPath.usbDirect,
+            effectivePath = SinkKind.usbUac,
             dsdTransport = com.annieplayer.annie_music.kt.core.audio.dsd.DsdTransport.dop,
         )
         assertEquals("USB · DoP · 1 Bit / 2822.4 kHz", outputPillText(dop))
@@ -561,7 +561,7 @@ class AudioTextTest {
             route = AudioRoute.usb,
             sourceRate = 2_822_400,
             sourceDepth = 1,
-            effectivePath = OutputPath.usbDirect,
+            effectivePath = SinkKind.usbUac,
             dsdTransport = com.annieplayer.annie_music.kt.core.audio.dsd.DsdTransport.native,
         )
         assertEquals("USB · Native DSD · 1 Bit / 2822.4 kHz", outputPillText(native))
@@ -577,7 +577,7 @@ class AudioTextTest {
             sourceDepth = 1,
             deliveredRate = 176_400,
             deliveredDepth = 24,
-            effectivePath = OutputPath.usbDirect,
+            effectivePath = SinkKind.usbUac,
             dsdTransport = com.annieplayer.annie_music.kt.core.audio.dsd.DsdTransport.pcm,
             dsdTargetRate = 176_400,
             tier = OutputTier.ownSrc,
@@ -600,7 +600,7 @@ class AudioTextTest {
             sourceDepth = 1,
             deliveredRate = 176_400,
             deliveredDepth = 24,
-            effectivePath = OutputPath.usbDirect,
+            effectivePath = SinkKind.usbUac,
             dsdTransport = com.annieplayer.annie_music.kt.core.audio.dsd.DsdTransport.pcm,
             dsdTargetRate = 176_400,
             tier = OutputTier.ownSrc,

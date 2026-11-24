@@ -78,7 +78,6 @@ internal fun KugouStyleSheet(
             Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
                 LocalDetailTopBar(
                     title = title,
-                    count = if (songs.isEmpty()) null else "${songs.size} 首",
                     onClose = requestClose,
                 )
                 // 固定在滚动区之外的间距：滑动时内容不会贴到标题上
@@ -95,7 +94,7 @@ internal fun KugouStyleSheet(
                         LazyColumn(
                             state = listState,
                             modifier = Modifier.fillMaxSize().shortScrollbar(listState),
-                            contentPadding = PaddingValues(bottom = AppSpacing.sp40),
+                            contentPadding = PaddingValues(bottom = AppSpacing.listBottomInset),
                         ) {
                             itemsIndexed(songs, key = { _, song -> song.id }) { index, song ->
                                 HomeSongRow(

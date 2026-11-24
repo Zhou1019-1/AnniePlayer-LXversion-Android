@@ -17,11 +17,10 @@ internal interface PcmEngine {
 
     val id: String
 
-    /**
-     * @param encoding Media3 的 `C.ENCODING_PCM_*`。**不能用位深代替**：
-     *   32 位既可能是 float 也可能是 int32，字节解释完全不同。
-     * @param wireBits 内容位宽（bit），0 = 不表态。用来选「装得下且最窄」的端点格式
-     */
+    val restartInPlace: Boolean get() = false
+
+    fun ringCapacityFrames(handle: Long): Long = 0L
+
     fun open(sampleRate: Int, encoding: Int, channels: Int, wireBits: Int = 0): Long
 
     /**
@@ -118,14 +117,36 @@ internal object OboeEngine : PcmEngine {
 
     override val id: String get() = "AAudio"
 
-    override fun open(sampleRate: Int, encoding: Int, channels: Int, wireBits: Int): Long {
-        val depth = when (encoding) {
-            C.ENCODING_PCM_16BIT -> 16
-            C.ENCODING_PCM_24BIT -> 24
-            else -> 32
-        }
-        return NativeOboeStream.open(sampleRate, depth, channels, exclusive = true)
-    }
+    override fun open(sampleRate: Int, encoding: Int, channels: Int, wireBits: Int): Long =
+        openAaudio(
+            sampleRate = sampleRate,
+            depth = when (encoding) {
+                C.ENCODING_PCM_16BIT -> 16
+                C.ENCODING_PCM_24BIT -> 24
+                else -> 32
+            },
+            channels = channels,
+            deviceId = 0,
+            framesPerCallback = 0,
+            bufferCapacityFrames = 0,
+        )
+
+    fun openAaudio(
+        sampleRate: Int,
+        depth: Int,
+        channels: Int,
+        deviceId: Int,
+        framesPerCallback: Int,
+        bufferCapacityFrames: Int,
+    ): Long = NativeOboeStream.open(
+        sampleRate = sampleRate,
+        depth = depth,
+        channels = channels,
+        exclusive = true,
+        deviceId = deviceId,
+        framesPerCallback = framesPerCallback,
+        bufferCapacityFrames = bufferCapacityFrames,
+    )
 
     override fun close(handle: Long) = NativeOboeStream.close(handle)
 
@@ -156,6 +177,11 @@ internal class UacEngine private constructor(
 ) : PcmEngine {
 
     override val id: String get() = "USB"
+
+    override val restartInPlace: Boolean get() = true
+
+    override fun ringCapacityFrames(handle: Long): Long =
+        NativeUacStream.ringCapacityFrames(handle).toLong()
 
     override fun open(sampleRate: Int, encoding: Int, channels: Int, wireBits: Int): Long {
         // 不在这里回读设备率：`nativeDeviceRate` 是一次同步控制传输，而 libusb 的同步等待

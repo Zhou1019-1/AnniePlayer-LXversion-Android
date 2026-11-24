@@ -31,11 +31,23 @@ suspend fun getAlbumSongs(albumId: String): KuwoAlbumSongs {
 
     var songList = emptyList<Map<String, Any?>>()
     var pub = ""
+    // 唱片公司 / 版权方（酷我 albuminfo 里有就取；没有就是空串，写标签时当 copyright 用）
+    var company = ""
+    // 专辑名 / 专辑艺术家：albuminfo 的顶层 `name` 与 `artist`（缺失时退 `aartist`）
+    var albumName = ""
+    var artistName = ""
     try {
         val parsed = jsonElementToAny(json.parseToJsonElement(text))
         if (parsed is Map<*, *>) {
             songList = kuwoMapList(parsed["musiclist"])
             pub = kuwoStrOr(parsed["pub"], "")
+            company = kuwoStrOr(parsed["company"], "").ifEmpty {
+                kuwoStrOr(parsed["companyname"], "")
+            }
+            albumName = decodeHtmlEntities(kuwoStrOr(parsed["name"], ""))
+            artistName = decodeHtmlEntities(
+                kuwoStrOr(parsed["artist"], "").ifEmpty { kuwoStrOr(parsed["aartist"], "") },
+            )
         }
     } catch (_: Throwable) {
         val m = kuwoReMusicList.find(text)
@@ -48,6 +60,8 @@ suspend fun getAlbumSongs(albumId: String): KuwoAlbumSongs {
         }
         val pm = kuwoRePub.find(text)
         if (pm != null) pub = pm.groupValues[1]
+        val cm = kuwoReCompany.find(text)
+        if (cm != null) company = cm.groupValues[1]
     }
 
     val songs = songList.map { item ->
@@ -79,7 +93,13 @@ suspend fun getAlbumSongs(albumId: String): KuwoAlbumSongs {
             genre = asText(item["genre"]).ifEmpty { null },
         )
     }
-    return KuwoAlbumSongs(songs = songs, pub = pub)
+    return KuwoAlbumSongs(
+        songs = songs,
+        pub = pub,
+        company = company,
+        albumName = albumName,
+        artistName = artistName,
+    )
 }
 
 private val _albumDetailCache = HashMap<String, KuwoAlbumSongs>()

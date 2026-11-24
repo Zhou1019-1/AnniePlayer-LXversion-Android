@@ -1,6 +1,7 @@
 package com.annieplayer.annie_music.kt.widgets
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
@@ -26,6 +27,20 @@ fun Modifier.clickableRipple(onClick: () -> Unit): Modifier {
     return this.clickable(
         interactionSource = interaction,
         indication = ripple(color = AppColors.white24),
+        onClick = onClick,
+    )
+}
+
+@Composable
+fun Modifier.combinedClickableRipple(
+    onClick: () -> Unit,
+    onLongClick: (() -> Unit)? = null,
+): Modifier {
+    val interaction = remember { MutableInteractionSource() }
+    return this.combinedClickable(
+        interactionSource = interaction,
+        indication = ripple(color = AppColors.white24),
+        onLongClick = onLongClick,
         onClick = onClick,
     )
 }

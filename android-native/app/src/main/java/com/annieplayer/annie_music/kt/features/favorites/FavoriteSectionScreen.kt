@@ -43,6 +43,7 @@ import com.annieplayer.annie_music.kt.features.library.LocalDetailTopBar
 import com.annieplayer.annie_music.kt.features.library.LocalStaticBackdrop
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 import com.annieplayer.annie_music.kt.widgets.SearchBarField
+import com.annieplayer.annie_music.kt.widgets.SongLikeStyle
 
 /**
  * 收藏库的子页（`FavoriteSectionRoute` 渲染它）。
@@ -252,6 +253,8 @@ private fun ColumnScope.LikedSongsBody(
             currentSong = playback.currentSong,
             onPlayAt = { playerViewModel.setQueue(liveSongs, it) },
             onMore = { uiViewModel.setSongActionsVisible(true, it) },
+            // 行尾是空心斜杠爱心：点它 = 取消收藏，该行随即从这一页消失
+            likeStyle = SongLikeStyle.RemoveOnly,
         )
     }
 }

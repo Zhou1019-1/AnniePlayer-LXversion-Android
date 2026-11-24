@@ -29,7 +29,9 @@ import com.annieplayer.annie_music.kt.ui.theme.AppIconSize
 import com.annieplayer.annie_music.kt.ui.theme.AppRadius
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 
-/** 身份卡上的一枚规格角标。[accent] 为 true 时用主色（音质档位这类「规格」）。 */
+/**
+ * 身份卡上的一枚规格角标。[accent] 为 true 时用主色（音质档位这类「规格」）。
+ */
 data class SheetHeroChip(
     val text: String,
     val accent: Boolean = false,
@@ -47,6 +49,10 @@ data class SheetHeroChip(
  * - 封面 60dp / 圆角 [AppRadius.r10] / 底色 [AppColors.whiteA04]，无封面时画音符
  * - 标题 17sp SemiBold，副标题 13sp [AppColors.textSecondary]，角标 10sp 胶囊
  *
+ * [titleCopy] 非空时在标题文字末尾追加一个复制按钮；[subtitleFields] 非空时副标题按
+ * **每个字段各一个复制按钮**渲染（`歌手` 与 `专辑` 各一个，中间仍是 ` · ` 分隔）。
+ * 字体、颜色、行数上限、行间距一个都不动，按钮紧贴文字后面跟着排，不推到行尾对齐。
+ *
  * 目前两个面板共用：歌曲操作（[SongActionsSheet]）与本地文件详情（`LocalFileDetailsSheet`）。
  */
 @Composable
@@ -56,6 +62,82 @@ fun SheetHeroCard(
     cover: String?,
     modifier: Modifier = Modifier,
     chips: List<SheetHeroChip> = emptyList(),
+    titleCopy: String? = null,
+    subtitleFields: List<String> = emptyList(),
+) {
+    HeroCardShell(cover = cover, modifier = modifier) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                // fill = false：文字只占它需要的宽度，复制按钮就紧贴在文字后面跟着走，
+                // 不会因为「撑满整行」被推到卡片右边（那样每一行按钮都对齐成一条竖线）
+                modifier = Modifier.weight(1f, fill = false),
+                color = AppColors.textPrimary,
+                fontSize = AppFontSize.size17,
+                fontWeight = FontWeight.SemiBold,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (titleCopy != null) CopyFieldButton(text = titleCopy)
+        }
+        Spacer(modifier = Modifier.height(AppSpacing.sp2))
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            if (subtitleFields.isEmpty()) {
+                Text(
+                    text = subtitle,
+                    modifier = Modifier.weight(1f, fill = false),
+                    color = AppColors.textSecondary,
+                    fontSize = AppFontSize.size13,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            } else {
+                subtitleFields.forEachIndexed { index, value ->
+                    if (index > 0) {
+                        Text(
+                            text = " · ",
+                            color = AppColors.textSecondary,
+                            fontSize = AppFontSize.size13,
+                            maxLines = 1,
+                        )
+                    }
+                    Text(
+                        text = value,
+                        modifier = Modifier.weight(1f, fill = false),
+                        color = AppColors.textSecondary,
+                        fontSize = AppFontSize.size13,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    CopyFieldButton(text = value)
+                }
+            }
+        }
+        if (chips.isNotEmpty()) {
+            Spacer(modifier = Modifier.height(AppSpacing.sp8))
+            // 规格角标：音质档位用主色，时长 / 体积用中性 —— 一眼分出「规格」与「属性」
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                chips.forEachIndexed { index, chip ->
+                    if (index > 0) Spacer(modifier = Modifier.width(AppSpacing.sp6))
+                    HeroChip(text = chip.text, accent = chip.accent)
+                }
+            }
+        }
+    }
+}
+
+/** 身份卡外壳：渐变底 + 圆角 + 60dp 封面 + 右侧内容列。两种卡共用这一份，避免长得不一样。 */
+@Composable
+private fun HeroCardShell(
+    cover: String?,
+    modifier: Modifier = Modifier,
+    content: @Composable androidx.compose.foundation.layout.ColumnScope.() -> Unit,
 ) {
     Row(
         modifier = modifier
@@ -92,34 +174,7 @@ fun SheetHeroCard(
             }
         }
         Spacer(modifier = Modifier.width(AppSpacing.sp12))
-        Column(modifier = Modifier.weight(1f)) {
-            Text(
-                text = title,
-                color = AppColors.textPrimary,
-                fontSize = AppFontSize.size17,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(modifier = Modifier.height(AppSpacing.sp2))
-            Text(
-                text = subtitle,
-                color = AppColors.textSecondary,
-                fontSize = AppFontSize.size13,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (chips.isNotEmpty()) {
-                Spacer(modifier = Modifier.height(AppSpacing.sp8))
-                // 规格角标：音质档位用主色，时长 / 体积用中性 —— 一眼分出「规格」与「属性」
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    chips.forEachIndexed { index, chip ->
-                        if (index > 0) Spacer(modifier = Modifier.width(AppSpacing.sp6))
-                        HeroChip(text = chip.text, accent = chip.accent)
-                    }
-                }
-            }
-        }
+        Column(modifier = Modifier.weight(1f), content = content)
     }
 }
 

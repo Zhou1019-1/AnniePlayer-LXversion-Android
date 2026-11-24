@@ -30,6 +30,18 @@ data class LyricLine(
  * `[mm:ss.xx]` 或 `[mm:ss.xxx]`；多时间戳行按「首个标签 + 余下整段文本」匹配（与 Dart 行为一致）。
  */
 private val _lrcRegex by lazy { Regex("\\[(\\d{2}):(\\d{2})\\.(\\d{2,3})\\](.*)") }
+/**
+ * 占位行：整行只有 `/` 或空白。
+ *
+ * QQ 的 `trans`（翻译 LRC）就是这样——没有翻译的行写成 `[00:14.39]//`，实测《淘金小镇》
+ * 51 行里有 40 多行是 `//`。不过滤的话播放页每句下面都挂一个 `//`，
+ * `mergeLyrics` 还会把它写进文件标签，别的播放器同样显示。
+ *
+ * 只认「全是斜杠/空白」，所以 `a / b`、`AC/DC` 这类真实文本不会误伤。
+ */
+private fun _isPlaceholderText(text: String): Boolean =
+    text.isNotEmpty() && text.all { it == '/' || it.isWhitespace() }
+
 /** 解析 LRC 文本为歌词行列表（按时间升序） */
 fun parseLrc(lrc: String): List<LyricLine> {
     val lines = mutableListOf<LyricLine>()
@@ -41,7 +53,7 @@ fun parseLrc(lrc: String): List<LyricLine> {
         val ms = if (msStr.length == 2) msStr.toInt() * 10 else msStr.toInt()
         val time = min * 60 + sec + ms / 1000.0
         val text = m.groupValues[4].trim()
-        if (text.isNotEmpty()) lines.add(LyricLine(time = time, text = text))
+        if (text.isNotEmpty() && !_isPlaceholderText(text)) lines.add(LyricLine(time = time, text = text))
     }
     lines.sortBy { it.time }
     return lines
@@ -57,7 +69,7 @@ private fun _parseTlyric(tlyric: String): Map<Int, String> {
         val ms = if (msStr.length == 2) msStr.toInt() * 10 else msStr.toInt()
         val time = ((min * 60 + sec + ms / 1000.0) * 1000).roundToInt()
         val text = m.groupValues[4].trim()
-        if (text.isNotEmpty()) map[time] = text
+        if (text.isNotEmpty() && !_isPlaceholderText(text)) map[time] = text
     }
     return map
 }
@@ -243,7 +255,7 @@ fun splitEmbeddedLyric(raw: String): Triple<String, String?, String?> {
         }
         val m = _lrcRegex.find(t) ?: continue
         val text = m.groupValues[4].trim()
-        if (text.isNotEmpty()) entries.add(_EmbeddedEntry(_tagToMs(m), text, null))
+        if (text.isNotEmpty() && !_isPlaceholderText(text)) entries.add(_EmbeddedEntry(_tagToMs(m), text, null))
     }
     if (entries.isEmpty()) return Triple("", null, null)
 

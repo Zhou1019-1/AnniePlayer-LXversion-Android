@@ -12,6 +12,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -25,6 +26,12 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.PageSize
+import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeoutOrNull
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -55,20 +62,21 @@ import com.annieplayer.annie_music.kt.data.model.HomeCardStyle
 import com.annieplayer.annie_music.kt.data.model.HomeItem
 import com.annieplayer.annie_music.kt.data.model.HomeShelf
 import com.annieplayer.annie_music.kt.data.model.HomeTarget
-import com.annieplayer.annie_music.kt.data.model.MusicPlatform
-import com.annieplayer.annie_music.kt.data.model.Quality
 import com.annieplayer.annie_music.kt.data.model.Song
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppDuration
 import com.annieplayer.annie_music.kt.ui.theme.AppEasing
 import com.annieplayer.annie_music.kt.ui.theme.AppFontSize
 import com.annieplayer.annie_music.kt.ui.theme.AppFontWeight
+import com.annieplayer.annie_music.kt.ui.theme.AppIconSize
 import com.annieplayer.annie_music.kt.ui.theme.AppRadius
 import com.annieplayer.annie_music.kt.ui.theme.AppSize
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
+import com.annieplayer.annie_music.kt.widgets.DetailChevronRight
 import com.annieplayer.annie_music.kt.widgets.PlayingIndicator
 import com.annieplayer.annie_music.kt.widgets.SkeletonLoader
-import com.annieplayer.annie_music.kt.widgets.SongMoreButton
+import com.annieplayer.annie_music.kt.widgets.SongRowActions
+import com.annieplayer.annie_music.kt.widgets.SongRowCoverArt
 import com.annieplayer.annie_music.kt.widgets.SongRowPager
 import com.annieplayer.annie_music.kt.widgets.clickableRipple
 import com.annieplayer.annie_music.kt.widgets.playingRowBackground
@@ -290,13 +298,25 @@ private fun HomeShelfHeader(
         // 图形徽标（替代原来那根渐变竖条）：28dp 渐变圆底 + 主色细环 + 自绘图形
         HomeShelfGlyphChip(kind = glyph)
         Spacer(modifier = Modifier.width(AppSpacing.sp8))
-        Text(
-            text = title,
-            color = AppColors.white,
-            fontSize = AppFontSize.size17,
-            fontWeight = AppFontWeight.bold,
-        )
-        // 唯一带权重的子项：吃满标题与「全部」之间的所有空间，把「全部」顶到最右
+        Row(
+            modifier = Modifier
+                .then(if (onSeeAll != null) Modifier.clickableRipple(onSeeAll) else Modifier),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                color = AppColors.white,
+                fontSize = AppFontSize.size17,
+                fontWeight = AppFontWeight.bold,
+            )
+            if (onSeeAll != null) {
+                Spacer(modifier = Modifier.width(AppSpacing.sp4))
+                DetailChevronRight(
+                    modifier = Modifier.size(AppIconSize.icon16),
+                    tint = AppColors.whiteA50,
+                )
+            }
+        }
         Spacer(modifier = Modifier.width(AppSpacing.sp8))
         Text(
             text = subtitle,
@@ -306,20 +326,8 @@ private fun HomeShelfHeader(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f),
         )
-        // 区块操作（换风格 / 换一批）：44dp 命中区，天然占满行高，不需要额外留白
         if (actionGlyph != null && onAction != null) {
             HomeShelfActionButton(glyph = actionGlyph, onClick = onAction)
-        }
-        if (onSeeAll != null) {
-            Spacer(modifier = Modifier.width(AppSpacing.sp8))
-            Text(
-                text = "全部",
-                color = AppColors.whiteA50,
-                fontSize = AppFontSize.size13,
-                modifier = Modifier
-                    .clickableRipple(onSeeAll)
-                    .padding(vertical = AppSpacing.sp4),
-            )
         }
     }
 }
@@ -344,9 +352,19 @@ internal fun HomeSongRow(
     leadingSpace: Dp = AppSpacing.sp12,
 ) {
     val playingTint = AppColors.playingGray
+    // 高亮画在**整行**（含行尾 ♥ · ⋮）：画在内层内容盒上时行尾按钮不在高亮范围内，
+    // 看起来像「只亮了一半」—— 与 `SingerDetailSongRow` / `LocalSongRow` 同一套规则。
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                if (isActive) {
+                    // 竖条贴行左边界（内缩 2dp），与封面之间留出 10dp 空隙
+                    Modifier.playingRowBackground(tint = playingTint, startInset = 2.dp)
+                } else {
+                    Modifier
+                },
+            )
             .padding(end = trailingSpace),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -354,14 +372,6 @@ internal fun HomeSongRow(
             modifier = Modifier
                 .weight(1f)
                 .height(AppSize.detailRowHeight)
-                .then(
-                    if (isActive) {
-                        // 竖条贴行左边界（内缩 2dp），与封面之间留出 10dp 空隙
-                        Modifier.playingRowBackground(tint = playingTint, startInset = 2.dp)
-                    } else {
-                        Modifier
-                    },
-                )
                 .clickableRipple(onPlay)
                 .padding(
                     start = leadingSpace,
@@ -394,7 +404,7 @@ internal fun HomeSongRow(
                     Spacer(modifier = Modifier.width(AppSpacing.sp8))
                 }
                 Box(contentAlignment = Alignment.Center) {
-                    HomeSongCover(song = song)
+                    SongRowCoverArt(coverUrl = song.cover)
                     if (isActive && !showIndex) {
                         // 序号列不显示时，等化器叠在封面中心（46% 黑罩保证看得清）
                         Box(
@@ -429,75 +439,10 @@ internal fun HomeSongRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                HomeSongQualityBadges(song)
             }
         }
-        SongMoreButton(onClick = onMore)
-    }
-}
-
-/**
- * 音质角标（与歌手详情同一套规则）。
- *
- * 只标「特殊规格」：高解析 / Atmos / 无损 → `Hi-Res`（Apple 另外单列 `Dolby`）。
- * 普通 320K / 128K 不占位 —— 首页行宽有限，人人都有档位标签等于没有标签。
- */
-private fun homeQualityBadges(song: Song): List<String> =
-    if (song.platform == MusicPlatform.apple) {
-        buildList {
-            if (Quality.hires in song.qualities) add("Hi-Res")
-            if (Quality.atmos in song.qualities) add("Dolby")
-        }
-    } else {
-        if (song.qualities.any { it == Quality.hires || it == Quality.atmos || it == Quality.alac }) {
-            listOf("Hi-Res")
-        } else {
-            emptyList()
-        }
-    }
-
-@Composable
-private fun HomeSongQualityBadges(song: Song) {
-    for (badge in homeQualityBadges(song)) {
-        Spacer(modifier = Modifier.width(AppSpacing.sp4))
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(percent = 25))
-                .background(AppColors.primaryA15)
-                .padding(horizontal = AppSpacing.sp4, vertical = 1.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(text = badge, color = AppColors.primary, fontSize = AppFontSize.size10)
-        }
-    }
-}
-
-/** 40dp 圆角封面（与详情页歌曲行同尺寸）；无图 / 加载失败显示音符占位。 */
-@Composable
-private fun HomeSongCover(song: Song) {
-    Box(
-        modifier = Modifier
-            .size(AppSpacing.sp40)
-            .clip(RoundedCornerShape(AppRadius.r6))
-            .background(AppColors.whiteA03),
-        contentAlignment = Alignment.Center,
-    ) {
-        var failed by remember(song.id) { mutableStateOf(false) }
-        if (song.cover.isEmpty() || failed) {
-            Text(
-                text = "♪",
-                color = AppColors.whiteA15,
-                fontSize = AppFontSize.size15,
-            )
-        } else {
-            AsyncImage(
-                model = song.cover,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                onError = { failed = true },
-                modifier = Modifier.fillMaxSize(),
-            )
-        }
+        // 行尾：♥ · ⋮（收藏状态由宿主经 `LocalSongLike` 注入）
+        SongRowActions(song = song, onMore = onMore)
     }
 }
 
@@ -529,30 +474,14 @@ private fun HomeCardRow(
     }
 }
 
-/** 精选大图轮播每张停留时长。 */
-private const val HomeHeroHoldMs = 3500L
+/** 精选大图轮播的静止门槛：手停下来这么久才自动前进一张，滑动期间完全暂停。 */
+private const val HomeHeroIdleHoldMs = 5_000L
 
 /** 精选大图卡占屏宽的比例（留一点右边，提示「还能往左滑」）。 */
 private const val HomeHeroWidthFraction = 0.88f
 
-/**
- * 精选大图行（目前只有酷我「精选歌单」）：**封面完整显示** + **自动无限轮播**。
- *
- * 为什么不用普通的 168dp 方图行：破坏的是「显示不全」——酷我这类运营位给的是宽图
- * （`star/upload/ecom` 目录下那批），`ContentScale.Crop` 到 1:1 会砍掉左右各一大块。
- * 这里用 16:9 容器 + `ContentScale.Fit`，宽图完整、方图靠底板色补边，两个方向都不裁。
- *
- * ## 为什么要渲染两份、而不是 `% size` 往回跳
- * 卡片占屏宽 88%，**最后几张必然被 clamp**（滚不动了）：这时
- * `firstVisibleItemIndex` 停在倒数第二三张不再增长，按索引取模算出来的"下一张"会往回退，
- * 表现就是「轮播完一遍就停在那里」。所以这里把内容按两份渲染（`visible + visible`），
- * 于是"越过末尾"就等于走到第二份的开头 —— 位置永远滚得动，视觉上一直向前；
- * 越过之后再用 `scrollToItem(i - size)` **无声归位**（两份内容一模一样，看不出跳）。
- *
- * 另外两条：
- * 1. 只有一张时不动（`size <= 1` 直接返回），否则每秒都在原地 animate；
- * 2. 用户手指还在滑（`isScrollInProgress`）时跳过这一拍，不跟手抢。
- */
+private const val HomeHeroLoopPages = 400
+
 @Composable
 private fun HomeHeroRow(
     items: List<HomeItem>,
@@ -560,30 +489,34 @@ private fun HomeHeroRow(
 ) {
     val visible = remember(items) { items.take(HomeVisibleCards) }
     if (visible.isEmpty()) return
-    // 两份内容：让"末尾之后"永远还有下一张，滚动位置不会被 clamp 住
-    val looped = remember(visible) { visible + visible }
-    val listState = rememberLazyListState()
-    LaunchedEffect(looped.map { it.key }) {
-        if (visible.size <= 1) return@LaunchedEffect
-        while (true) {
-            kotlinx.coroutines.delay(HomeHeroHoldMs)
-            if (listState.isScrollInProgress) continue
-            val next = listState.firstVisibleItemIndex + 1
-            listState.animateScrollToItem(next)
-            // 已经停在第二份里（内容＝第一份同位置）→ 无声退回第一份，用户看不出跳
-            if (next >= visible.size) listState.scrollToItem(next - visible.size)
+    BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+        val cardWidth = maxWidth * HomeHeroWidthFraction
+        val pagerState = rememberPagerState(
+            initialPage = visible.size * (HomeHeroLoopPages / 2),
+            pageCount = { visible.size * HomeHeroLoopPages },
+        )
+        LaunchedEffect(visible.map { it.key }) {
+            if (visible.size <= 1) return@LaunchedEffect
+            while (true) {
+                snapshotFlow { pagerState.isScrollInProgress }.first { !it }
+                val interrupted = withTimeoutOrNull(HomeHeroIdleHoldMs) {
+                    snapshotFlow { pagerState.isScrollInProgress }.first { it }
+                }
+                if (interrupted != null) continue
+                pagerState.animateScrollToPage(pagerState.currentPage + 1)
+            }
         }
-    }
-    LazyRow(
-        state = listState,
-        contentPadding = PaddingValues(horizontal = AppSpacing.sp4),
-        horizontalArrangement = Arrangement.spacedBy(AppSpacing.sp12),
-    ) {
-        // key 带下标：两份内容里有重复 key，LazyRow 不允许
-        itemsIndexed(looped, key = { index, item -> "$index:${item.key}" }) { _, item ->
+        HorizontalPager(
+            state = pagerState,
+            pageSize = PageSize.Fixed(cardWidth),
+            contentPadding = PaddingValues(horizontal = AppSpacing.sp4),
+            pageSpacing = AppSpacing.sp12,
+            modifier = Modifier.fillMaxWidth(),
+        ) { page ->
+            val item = visible[page % visible.size]
             HomeHeroCard(
                 item = item,
-                modifier = Modifier.fillParentMaxWidth(HomeHeroWidthFraction),
+                modifier = Modifier.fillMaxWidth(),
                 onClick = { item.target?.let(onOpenTarget) },
             )
         }

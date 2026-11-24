@@ -16,6 +16,18 @@ import com.annieplayer.annie_music.kt.data.sources.splitArtistNames
 // 酷我映射（纯函数：JSON → Song / Album / Artist）
 // ================================================================================================
 
+private val _kuwoCoverSuffix = Regex("""_(\d+)\.(jpe?g|png|webp)$""", RegexOption.IGNORE_CASE)
+
+internal fun kuwoCoverAtSize(raw: String, size: Int = 700): String {
+    if (raw.isEmpty()) return raw
+    val match = _kuwoCoverSuffix.find(raw)
+    if (match == null) return raw.replaceFirst("/120/", "/$size/")
+    val current = match.groupValues[1].toIntOrNull() ?: return raw
+    if (current >= size) return raw
+    val extension = match.groupValues[2]
+    return raw.replaceRange(match.range, "_$size.$extension")
+}
+
 /**
  * 酷我的歌手名与歌手 id 是**分开给**的：名字是一个合并串（`A&B`），id 在 `allartistid`。
  *
@@ -132,7 +144,7 @@ internal fun kuwoMapAlbums(raw: Any?): List<Album> {
 internal fun kuwoMapSong(item: Map<String, Any?>): Song {
     val coverUrl = buildCoverUrl(item).ifEmpty {
         kuwoStrOr(firstTruthy(listOf(item["pic"], item["albumpic"], item["musicPic"])), "")
-    }.replaceFirst("/120/", "/800/")
+    }.let(::kuwoCoverAtSize)
     val qualities = kuwoQualities(item)
     val artistRaw = decodeHtmlEntities(kuwoStrOr(item["artist"], "未知歌手"))
     // 与搜索/专辑路径同一条判据（id 个数），否则「Years & Years」会被拆成两个歌手

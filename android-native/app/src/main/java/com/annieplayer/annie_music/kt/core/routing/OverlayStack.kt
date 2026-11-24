@@ -38,6 +38,22 @@ enum class Overlay(
     SONG_ACTIONS_SHEET("songActionsSheet"),
 
     /**
+     * 多选操作抽屉（`MultiSelectSheet`，搜索结果 / 歌手全部单曲共用）。
+     *
+     * 与 [SONG_ACTIONS_SHEET] 不会同时可见（一个是 ⋮ 的单曲动作，一个是多选动作），
+     * 这里只表达「谁盖谁」的兜底关系。
+     */
+    MULTI_SELECT_SHEET("multiSelectSheet"),
+
+    /**
+     * 「添加到」面板（选歌单）：多选态的「加入到歌单」直接弹它。
+     *
+     * 与 [MULTI_SELECT_SHEET] 的关系同 [LOCAL_DELETE_MODAL] —— 通常是「先收抽屉、再弹面板」，
+     * 顺序只表达谁盖谁。
+     */
+    PLAYLIST_PICKER_SHEET("playlistPickerSheet"),
+
+    /**
      * 本地歌曲删除确认弹窗（LocalDeleteModal）。
      *
      * ⋮ 面板的「删除」会先收起面板再挂出这个弹窗，所以它紧跟在 [SONG_ACTIONS_SHEET] 之上：
@@ -86,6 +102,7 @@ enum class Overlay(
             MINI_PLAYER,
             PLAYER_OVERLAY,
             SONG_ACTIONS_SHEET,
+            MULTI_SELECT_SHEET,
             LOCAL_DELETE_MODAL,
             ARTIST_PICKER_SHEET,
             QUALITY_PICKER_DOWNLOAD,
@@ -117,6 +134,17 @@ enum class BackTarget(
     /** 音质选择器（下载 / 批量共用）。 */
     QUALITY_PICKER("qualityPicker"),
 
+    /**
+     * 多选操作抽屉。
+     *
+     * 排在 [QUALITY_PICKER] **之后**（= 优先级更低）：抽屉里的「下载」会先关抽屉、
+     * 再弹音质面板，两者不会同时可见；万一将来同时可见，也该先关面板。
+     */
+    MULTI_SELECT("multiSelect"),
+
+    /** 「添加到」面板（选歌单）。 */
+    PLAYLIST_PICKER("playlistPicker"),
+
     /** 播放队列抽屉。 */
     QUEUE("queue"),
 
@@ -131,6 +159,7 @@ enum class BackTarget(
     // 它们在 `AppShell` 里的声明位置都在 `pageStack` 之后，所以实际互斥顺序本来就由
     // **注册顺序**决定（见 7.5）；这里登记只是为了 `handleBack` 能裁决 PAGE / SEARCH
     // 两个处理器该不该启用。组内顺序按声明顺序的逆序排，仅作阅读用。
+    LAN_REMOTE("lanRemote"),
     TRANSLATE_PICKER("translatePicker"),
     CACHE_CLEAR("cacheClear"),
     CONTACT("contact"),
@@ -149,18 +178,10 @@ enum class BackTarget(
     KKBOX_ACCOUNT("kkboxAccount"),
     QOBUZ_TOKEN("qobuzToken"),
     APPLE_SERVICE("appleService"),
+    LOCAL_SCAN("localScan"),
 
     /** 页面栈（`UiState.pageStack`）非空：至少有一个子页面压在根页之上。 */
     PAGE("page"),
-
-    /**
-     * 搜索页的「待下载」面板（`SearchSelectionOverlay`）。
-     *
-     * 它画在搜索结果之上、页面栈之下，所以返回优先级也排在 [PAGE] 之后：
-     * 详情页开着时先关详情，面板才轮到。排在 [SEARCH_SELECTION] **之前** ——
-     * 面板是「已选列表」的展开形态，返回先收面板，再退多选。
-     */
-    SEARCH_SELECTION_OVERLAY("searchSelectionOverlay"),
 
     /**
      * 搜索页的多选态（`selectedSongs` 非空）。
@@ -196,6 +217,10 @@ enum class BackTarget(
 data class OverlayVisibilityFlags(
     /** 单曲操作菜单是否可见。 */
     val songActions: Boolean = false,
+    /** 多选操作抽屉是否可见。 */
+    val multiSelect: Boolean = false,
+    /** 「添加到」面板（选歌单）是否可见。 */
+    val playlistPicker: Boolean = false,
     /** 歌手选择弹窗是否可见。 */
     val artistPicker: Boolean = false,
     /** 音质选择器是否可见（下载与批量任一即可）。 */
@@ -226,10 +251,12 @@ data class OverlayVisibilityFlags(
     val qobuzToken: Boolean = false,
     /** Apple 服务面板是否可见。 */
     val appleService: Boolean = false,
+    /** 本地扫描面板是否可见。 */
+    val localScan: Boolean = false,
+    /** 「遥控 PC 端安妮播放器」整页浮层是否可见。 */
+    val lanRemote: Boolean = false,
     /** 页面栈是否非空（有子页面压在根页之上）。 */
     val page: Boolean = false,
-    /** 搜索页的「待下载」面板是否打开。 */
-    val searchSelectionOverlay: Boolean = false,
     /** 搜索页是否处于多选态（有勾选的歌）。 */
     val searchSelection: Boolean = false,
     /** 主页的搜索态是否展开。 */
@@ -260,20 +287,23 @@ private val BACK_RULES: List<BackRule> = listOf(
     BackRule(BackTarget.SONG_ACTIONS) { it.songActions },
     BackRule(BackTarget.ARTIST_PICKER) { it.artistPicker },
     BackRule(BackTarget.QUALITY_PICKER) { it.qualityPicker },
+    BackRule(BackTarget.PLAYLIST_PICKER) { it.playlistPicker },
+    BackRule(BackTarget.MULTI_SELECT) { it.multiSelect },
     BackRule(BackTarget.QUEUE) { it.queue },
     BackRule(BackTarget.PLAYER_OVERLAY) { it.playerOverlay },
+    BackRule(BackTarget.LAN_REMOTE) { it.lanRemote },
     BackRule(BackTarget.TRANSLATE_PICKER) { it.translatePicker },
     BackRule(BackTarget.CACHE_CLEAR) { it.cacheClear },
     BackRule(BackTarget.CONTACT) { it.contact },
     BackRule(BackTarget.SOURCE_PICKER) { it.sourcePicker },
-    BackRule(BackTarget.LX_PLUGIN_MANAGER) { it.lxPluginManager },
     BackRule(BackTarget.DSD_OUTPUT) { it.dsdOutput },
+    BackRule(BackTarget.LX_PLUGIN_MANAGER) { it.lxPluginManager },
     BackRule(BackTarget.MORE_SETTINGS) { it.moreSettings },
+    BackRule(BackTarget.LOCAL_SCAN) { it.localScan },
     BackRule(BackTarget.KKBOX_ACCOUNT) { it.kkboxAccount },
     BackRule(BackTarget.QOBUZ_TOKEN) { it.qobuzToken },
     BackRule(BackTarget.APPLE_SERVICE) { it.appleService },
     BackRule(BackTarget.PAGE) { it.page },
-    BackRule(BackTarget.SEARCH_SELECTION_OVERLAY) { it.searchSelectionOverlay },
     BackRule(BackTarget.SEARCH_SELECTION) { it.searchSelection },
     BackRule(BackTarget.SEARCH) { it.searchExpanded },
     BackRule(BackTarget.DOWNLOAD_QUEUE) { it.downloadQueue },

@@ -77,28 +77,39 @@ suspend fun extractPlayerCoverPalette(coverSource: String): ColorPalette? {
             return null
         }
         val argb = withContext(Dispatchers.Default) { _extractPaletteIsolate(bytes) }
-        if (argb == null || argb.size < 2) {
-            _cache[coverSource] = _cacheMiss
-            return null
-        }
-        val gridColors = if (argb.size > 3) {
-            argb.drop(3).map { Color(it.toLong() and 0xFFFFFFFFL) }
-        } else {
-            emptyList()
-        }
-        val palette = ColorPalette.fallback.copyWith(
-            primary = Color(argb[0].toLong() and 0xFFFFFFFFL),
-            secondary = Color(argb[1].toLong() and 0xFFFFFFFFL),
-            accent = Color((argb.getOrNull(2) ?: argb[1]).toLong() and 0xFFFFFFFFL),
-            coverGrid = gridColors,
-            coverGridDim = if (gridColors.isNotEmpty()) _GridDim else 0,
-        )
-        _cache[coverSource] = palette
+        val palette = _paletteOf(argb)
+        _cache[coverSource] = palette ?: _cacheMiss
         return palette
     } catch (_: Throwable) {
         _cache[coverSource] = _cacheMiss
         return null
     }
+}
+
+suspend fun extractCoverPaletteFromBytes(bytes: ByteArray): ColorPalette? {
+    if (bytes.isEmpty()) return null
+    return try {
+        val argb = withContext(Dispatchers.Default) { _extractPaletteIsolate(bytes) }
+        _paletteOf(argb)
+    } catch (_: Throwable) {
+        null
+    }
+}
+
+private fun _paletteOf(argb: List<Int>?): ColorPalette? {
+    if (argb == null || argb.size < 2) return null
+    val gridColors = if (argb.size > 3) {
+        argb.drop(3).map { Color(it.toLong() and 0xFFFFFFFFL) }
+    } else {
+        emptyList()
+    }
+    return ColorPalette.fallback.copyWith(
+        primary = Color(argb[0].toLong() and 0xFFFFFFFFL),
+        secondary = Color(argb[1].toLong() and 0xFFFFFFFFL),
+        accent = Color((argb.getOrNull(2) ?: argb[1]).toLong() and 0xFFFFFFFFL),
+        coverGrid = gridColors,
+        coverGridDim = if (gridColors.isNotEmpty()) _GridDim else 0,
+    )
 }
 
 /** 读取封面字节：优先本地缓存文件，否则下载（浏览器 UA 绕过防盗链） */

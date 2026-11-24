@@ -1,42 +1,3 @@
-// ══════════════════════════════════════════════════════════════════════════════════════
-// Oboe 播放内核（`AAUDIO_BACKEND = OBOE` 时使用）
-// ══════════════════════════════════════════════════════════════════════════════════════
-//
-// ## 它替换的是什么
-//
-// `native-aaudio-probe.cpp` 的播放段是**手写推模式**：Kotlin 侧一个写线程不停
-// `AAudioStream_write`，写不下就 `sleep(2ms)` 重试，靠 1.5s 判断"设备是否还在吃数据"。
-// 这里是 **Oboe 回调拉模式**：HAL 每要一次数据就调 `onAudioReady`，我们从环形缓冲里
-// 拷过去，不够就填静音并记一次 underrun。
-//
-// **契约层完全不变**：JNI 函数签名与 raw 后端一字不差，`AaudioSink` 一行都不用改。
-// 于是 `getFramesRead`（只统计"真数据"帧）仍然驱动位置模型、`written > played` 仍然
-// 正确地表达"设备里还有没播完的帧"。
-//
-// ## 为什么"静音不算帧"
-//
-// 暂停时 Kotlin 侧只是停写（不 `requestPause`，那在本机 HAL 上会卡在 PAUSING 不动）。
-// 回调继续被调用，但环形缓冲空 → 填静音。如果静音也算进 `framesRead`，进度条会在
-// 暂停期间继续跑，位置模型立刻失真。所以**只有真正从环形缓冲取出的帧才累加** ——
-// 这样"暂停 = 位置冻结"是免费的。
-//
-// ## 线程模型
-//
-// * 生产者：Kotlin 侧 `annie-aaudio-write` 线程（唯一写者）
-// * 消费者：Oboe 回调线程（实时优先级，唯一读者）
-// * `flush/close` 由播放线程调用，且**调用前写线程已被 join**（`AaudioSink.closeAaudio()`
-//   的顺序保证），所以环形缓冲始终是严格的单生产者单消费者。
-//
-// 回调里**绝不能**做：分配内存、加锁、JNI 调用、日志。整段只有 memcpy/memset 与原子加法。
-//
-// ## 不期待的收益
-//
-// * 独占成功率：同一个 HAL profile，换封装不会让它更"独占"；
-// * 硬件时钟：本机 `AAudioStream_getTimestamp` 100% 失败，Oboe 的 `getTimestamp`
-//   在下面同样原样透传（失败就返回 false，让 Kotlin 侧回落到 `getFramesRead`）；
-// * 采样率/格式：仍要回读校验（HAL 可以给独占流却换掉规格，那就是"独占着重采样"）。
-// ══════════════════════════════════════════════════════════════════════════════════════
-
 #include <oboe/Oboe.h>
 
 #include <android/api-level.h>
@@ -45,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <vector>
@@ -108,13 +70,6 @@ public:
         return( oboe::DataCallbackResult::Continue );
     }
 
-    /**
-     * 设备被拔出 / 被别的应用抢走（异步，非回调线程）。
-     *
-     * 只置标志并把错误码留给 `lastError()`：**不在这里关流、不在这里通知上层**。
-     * 关流必须由播放线程做（否则就是那个 use-after-free 崩溃栈）；通知上层靠
-     * `nativeWrite` 返回负数，写线程按"写失败"路径上报 —— 与 raw 后端同一条降级通道。
-     */
     void onErrorAfterClose( oboe::AudioStream* /* stream */, oboe::Result error ) override
     {
         g_lastError = static_cast< int >( error );
@@ -145,17 +100,21 @@ OboeStream* asStream( jlong handle )
     return( reinterpret_cast< OboeStream* >( handle ));
 }
 
-/** `aaudio_format_t` 常量（与 raw 后端、与 Kotlin 侧 `aaudioFormatOf` 必须一字不差） */
 constexpr int kFormatI16 = 1;
 constexpr int kFormatFloat = 2;
 constexpr int kFormatI24Packed = 3;
+
+constexpr int kUnknownRate = 1;
+constexpr int kUnknownFormat = 2;
+constexpr int kUnknownHardwareFormat = 4;
 
 } // namespace
 
 extern "C" JNIEXPORT jlong JNICALL
 Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeOpen(
         JNIEnv* /* env */, jclass /* 静态方法 */,
-        jint sampleRate, jint depth, jint channels, jboolean exclusive )
+        jint sampleRate, jint depth, jint channels, jboolean exclusive,
+        jint deviceId, jint framesPerCallback, jint bufferCapacityFrames )
 {
     g_lastError = 0;
     if( sampleRate <= 0 || channels <= 0 )
@@ -173,14 +132,11 @@ Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeOpen(
     }
     else if( depth == 24 )
     {
-        // Oboe 的 I24 就是 AAudio 的 PCM_I24_PACKED（3 字节紧密排列）
         format = oboe::AudioFormat::I24;
         depthBytes = 3;
     }
 
-    // 与 raw 后端同一个数字：**必须显式给缓冲容量**，否则 HAL 会挑一个巨大的默认值
-    // （本机实测灌到 1,110,016 帧 ≈ 25 秒后 write 永久 WOULD_BLOCK）。
-    int32_t capacityFrames = sampleRate / 10;
+    int32_t capacityFrames = bufferCapacityFrames > 0 ? bufferCapacityFrames : sampleRate / 10;
     if( capacityFrames < 512 )
     {
         capacityFrames = 512;
@@ -197,41 +153,30 @@ Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeOpen(
     created->ring.init( std::max( ringBytes, ringFloor ), created->frameBytes );
 
     oboe::AudioStreamBuilder builder;
-    // ⚠️ **必须显式要 AAudio**，这是"OBOE 内核下独占不生效"的唯一原因。
-    //
-    // Oboe 的默认后端是**编译期**决定的（源码里 `#if __ANDROID_API__ >= 27` → AAudio，
-    // 否则 OpenSLES）。我们链接的 `liboboe.so` 预编译产物是按 **api 21** 编的
-    // （见 `thirdparty/oboe/README.md` 的 `abi.json`），于是 `AudioApi::Unspecified`
-    // 会安静地落到 **OpenSL ES**。而 OpenSL 根本没有 EXCLUSIVE 概念 ——
-    // `setSharingMode(Exclusive)` 被直接忽略，`getSharingMode()` 永远回 SHARED，
-    // 表现就是"内核是 OBOE，但 AAudio 独占从来不会生效"。
-    //
-    // 对照：RAW 后端直接 dlopen `libaaudio.so` 调 C API，不存在这层默认值，
-    // 所以切回 RAW 独占立刻正常 —— 这正是实测到的差异。
-    //
-    // API 26 才有 AAudio（24/25 上独占那一级本来就不成立），所以按**运行期** API 判断，
-    // 不按编译期：老机器保留 Unspecified 让它走 OpenSL（能播，只是不独占）。
     if( android_get_device_api_level() >= 26 )
     {
         builder.setAudioApi( oboe::AudioApi::AAudio );
     }
+    if( deviceId > 0 )
+    {
+        builder.setDeviceId( deviceId );
+    }
     builder.setDirection( oboe::Direction::Output )
+        ->setUsage( oboe::Usage::Media )
+        ->setContentType( oboe::ContentType::Music )
         ->setSampleRate( sampleRate )
         ->setChannelCount( static_cast< int32_t >( channels ))
         ->setFormat( format )
         ->setSharingMode( exclusive == JNI_TRUE ? oboe::SharingMode::Exclusive : oboe::SharingMode::Shared )
         ->setPerformanceMode( oboe::PerformanceMode::LowLatency )
         ->setBufferCapacityInFrames( capacityFrames )
-        // 数据回调不要缓冲：我们自己在环形缓冲里管节奏（`framesPerDataCallback = 0`
-        // 表示"跟 burst 一样大"，这是低延迟 + 足够安全余量的默认选择）。
-        ->setFramesPerDataCallback( 0 )
+        ->setFramesPerDataCallback( framesPerCallback > 0 ? framesPerCallback : 0 )
+        ->setFormatConversionAllowed( false )
+        ->setChannelConversionAllowed( false )
+        ->setSampleRateConversionQuality( oboe::SampleRateConversionQuality::None )
         ->setDataCallback( created )
         ->setErrorCallback( created );
 
-    // ⚠️ 不指定 `setAudioApi`：让 Oboe 自己挑 —— API ≥ 26 走 AAudio，
-    // API 24/25 自动退到 OpenSL ES。硬钉 AAudio 会让 minSdk 24 的机器直接开不出来。
-    //
-    // 用"出参"这个重载：1.11.0 的头文件里**没有**无参的 `ResultWithValue openStream()`。
     std::shared_ptr< oboe::AudioStream > stream;
     const oboe::Result opened = builder.openStream( stream );
     if( opened != oboe::Result::OK || !stream )
@@ -242,13 +187,16 @@ Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeOpen(
     }
     created->stream = std::move( stream );
 
-    // open 之后才知道 burst 有多长，这时才能把**实际**缓冲深度压到目标值。
-    // 压不下去也没关系：调用方会回读 `bufferCapacity/bufferSize` 如实上报。
     const int32_t burst = created->stream->getFramesPerBurst();
+    const int32_t deviceCapacity = created->stream->getBufferCapacityInFrames();
     int32_t want = capacityFrames;
     if( burst > 0 && want < burst * 2 )
     {
         want = burst * 2;
+    }
+    if( deviceCapacity > 0 && want < deviceCapacity )
+    {
+        want = deviceCapacity;
     }
     created->stream->setBufferSizeInFrames( want );
 
@@ -387,24 +335,9 @@ Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeAudio
     return( s->stream->getAudioApi() == oboe::AudioApi::AAudio ? 1 : 2 );
 }
 
-// ── 独占能力探测（用来分辨"为什么 Oboe 拿不到 EXCLUSIVE"）─────────────────────────────
-//
-// 背景：同一台机器上，RAW 后端（直接调 AAudio C API、推模式）能拿到 EXCLUSIVE，
-// Oboe 后端（回调拉模式）只拿到 SHARED。两边请求的参数看起来一模一样，差异只剩
-// "有没有设 data callback"和"有没有设 bufferCapacity"。
-//
-// 与其猜，不如把三个组合各开一条流、回读 `getSharingMode()`，一次把答案测出来：
-//   [0] callback + capacity   ← 播放路径当前用的组合
-//   [1] 无 callback + capacity
-//   [2] 无 callback + 不设 capacity
-// 返回值：1 = EXCLUSIVE，0 = SHARED，<= -100 = 开流失败（-100 - result）。
-//
-// 只 open 不 requestStart：不出声、不占用设备超过一瞬，探测完立刻 close。
-
 namespace
 {
 
-/** 探测专用：回调永远不会被调（不 start），存在只是为了满足 "callback 模式" */
 class SilentCallback : public oboe::AudioStreamDataCallback
 {
 public:
@@ -415,18 +348,28 @@ public:
     }
 };
 
-int32_t probeSharingOnce( int32_t sampleRate, int depth, int channels,
-                          bool withCallback, bool withCapacity,
-                          oboe::PerformanceMode performanceMode )
+} // namespace
+
+extern "C" JNIEXPORT jstring JNICALL
+Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeProbeExclusive(
+        JNIEnv* env, jclass /* 静态方法 */, jint sampleRate, jint pcmFormat )
 {
+    if( sampleRate <= 0 )
+    {
+        return( env->NewStringUTF( "err:rate" ));
+    }
+
     oboe::AudioFormat format = oboe::AudioFormat::Float;
-    if( depth == 16 )
+    int bits = 32;
+    if( pcmFormat == kFormatI16 )
     {
         format = oboe::AudioFormat::I16;
+        bits = 16;
     }
-    else if( depth == 24 )
+    else if( pcmFormat == kFormatI24Packed )
     {
         format = oboe::AudioFormat::I24;
+        bits = 24;
     }
 
     int32_t capacityFrames = sampleRate / 10;
@@ -435,8 +378,7 @@ int32_t probeSharingOnce( int32_t sampleRate, int depth, int channels,
         capacityFrames = 512;
     }
 
-    SilentCallback* callback = withCallback ? new SilentCallback() : nullptr;
-
+    SilentCallback callback;
     oboe::AudioStreamBuilder builder;
     if( android_get_device_api_level() >= 26 )
     {
@@ -444,74 +386,96 @@ int32_t probeSharingOnce( int32_t sampleRate, int depth, int channels,
     }
     builder.setDirection( oboe::Direction::Output )
         ->setSampleRate( sampleRate )
-        ->setChannelCount( static_cast< int32_t >( channels ))
+        ->setChannelCount( 2 )
         ->setFormat( format )
         ->setSharingMode( oboe::SharingMode::Exclusive )
-        ->setPerformanceMode( performanceMode );
-    if( withCapacity )
-    {
-        builder.setBufferCapacityInFrames( capacityFrames );
-    }
-    if( withCallback )
-    {
-        builder.setDataCallback( callback );
-    }
+        ->setPerformanceMode( oboe::PerformanceMode::LowLatency )
+        ->setBufferCapacityInFrames( capacityFrames )
+        ->setFramesPerDataCallback( 0 )
+        ->setFormatConversionAllowed( false )
+        ->setChannelConversionAllowed( false )
+        ->setSampleRateConversionQuality( oboe::SampleRateConversionQuality::None )
+        ->setDataCallback( &callback );
 
     std::shared_ptr< oboe::AudioStream > stream;
     const oboe::Result opened = builder.openStream( stream );
-    int32_t result;
     if( opened != oboe::Result::OK || !stream )
     {
-        result = -100 - static_cast< int32_t >( opened );
+        char buf[ 32 ];
+        snprintf( buf, sizeof( buf ), "err:%d", static_cast< int >( opened ));
+        return( env->NewStringUTF( buf ));
     }
-    else
+
+    const bool onAaudio = stream->getAudioApi() == oboe::AudioApi::AAudio;
+    const bool exclusive = stream->getSharingMode() == oboe::SharingMode::Exclusive;
+    const int32_t realRate = stream->getSampleRate();
+    const oboe::AudioFormat realFormat = stream->getFormat();
+    const oboe::AudioFormat hardwareFormat = stream->getHardwareFormat();
+    stream->close();
+    stream.reset();
+
+    if( !onAaudio )
     {
-        // 把"实际走的是哪个后端"编进返回值的高位：
-        //   +0  = AAudio、+10 = OpenSL ES
-        // 这一步是为了排除"Oboe 悄悄走了 OpenSL 所以必然共享"这种误判 ——
-        // OpenSL 没有 EXCLUSIVE 概念，共享是它的必然结果，与 HAL 无关。
-        const bool onAaudio = stream->getAudioApi() == oboe::AudioApi::AAudio;
-        result = ( onAaudio ? 0 : 10 ) +
-                 ( stream->getSharingMode() == oboe::SharingMode::Exclusive ? 1 : 0 );
-        stream->close();
-        stream.reset();
+        return( env->NewStringUTF( "err:opensl" ));
     }
-    delete callback;
-    return( result );
+
+    int gotBits = bits;
+    if( realFormat == oboe::AudioFormat::I16 )
+    {
+        gotBits = 16;
+    }
+    else if( realFormat == oboe::AudioFormat::I24 )
+    {
+        gotBits = 24;
+    }
+    else if( realFormat == oboe::AudioFormat::I32 || realFormat == oboe::AudioFormat::Float )
+    {
+        gotBits = 32;
+    }
+
+    int hardware = 0;
+    if( hardwareFormat == oboe::AudioFormat::I16 )
+    {
+        hardware = kFormatI16;
+    }
+    else if( hardwareFormat == oboe::AudioFormat::Float )
+    {
+        hardware = kFormatFloat;
+    }
+    else if( hardwareFormat == oboe::AudioFormat::I24 )
+    {
+        hardware = kFormatI24Packed;
+    }
+
+    const bool formatKnown = realFormat == oboe::AudioFormat::I16 ||
+                             realFormat == oboe::AudioFormat::I24 ||
+                             realFormat == oboe::AudioFormat::I32 ||
+                             realFormat == oboe::AudioFormat::Float;
+    int unknown = 0;
+    if( realRate <= 0 )
+    {
+        unknown |= kUnknownRate;
+    }
+    if( !formatKnown )
+    {
+        unknown |= kUnknownFormat;
+    }
+    if( hardware == 0 )
+    {
+        unknown |= kUnknownHardwareFormat;
+    }
+
+    char buf[ 112 ];
+    snprintf( buf, sizeof( buf ), "%s/%d/%d/%s/hw=%d/unk=%d",
+             exclusive ? "EXCLUSIVE" : "SHARED",
+             static_cast< int >( realRate ),
+             gotBits,
+             "LOW_LATENCY",
+             hardware,
+             unknown );
+    return( env->NewStringUTF( buf ));
 }
 
-} // namespace
-
-extern "C" JNIEXPORT jintArray JNICALL
-Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeProbeSharingMode(
-        JNIEnv* env, jclass /* 静态方法 */, jint sampleRate, jint depth, jint channels )
-{
-    namespace ob = oboe;
-    jint values[ 5 ];
-    // 前三组：低延迟模式下的参数对比（callback / capacity）
-    values[ 0 ] = probeSharingOnce( sampleRate, depth, channels, true, true, ob::PerformanceMode::LowLatency );
-    values[ 1 ] = probeSharingOnce( sampleRate, depth, channels, false, true, ob::PerformanceMode::LowLatency );
-    values[ 2 ] = probeSharingOnce( sampleRate, depth, channels, false, false, ob::PerformanceMode::LowLatency );
-    // 后两组：**关键假设** —— MIUI 那条 `forbiding ull track route` 剥的是 ULL 路由标志，
-    // 而 `LOW_LATENCY` 就是 ULL 的触发器。音乐播放不需要低延迟，只需要"不转换"，
-    // 所以如果 NONE 能绕过剥离逻辑拿到 EXCLUSIVE，这一级就成立。
-    values[ 3 ] = probeSharingOnce( sampleRate, depth, channels, false, false, ob::PerformanceMode::None );
-    values[ 4 ] = probeSharingOnce( sampleRate, depth, channels, true, false, ob::PerformanceMode::None );
-    jintArray out = env->NewIntArray( 5 );
-    if( out != nullptr )
-    {
-        env->SetIntArrayRegion( out, 0, 5, values );
-    }
-    return( out );
-}
-
-/**
- * 丢弃未播数据。
- *
- * 注意：这只清**我方环形缓冲**，HAL 手里已经拿走的样本来不及撤回 —— 所以
- * `AaudioSink.flush()` 走的仍然是"关流 + 重开"（与 raw 后端一致的行为）。
- * 这个函数留着是为了接口完整，不承担 seek 的正确性。
- */
 extern "C" JNIEXPORT void JNICALL
 Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeFlush(
         JNIEnv* /* env */, jclass /* 静态方法 */, jlong handle )
@@ -592,7 +556,6 @@ Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeFrame
     return( static_cast< jlong >( s->framesRead.load( std::memory_order_relaxed )));
 }
 
-/** 流的真实共享模式：1 = EXCLUSIVE，0 = SHARED，-1 = 句柄无效（与 raw 后端同约定） */
 extern "C" JNIEXPORT jint JNICALL
 Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeSharingMode(
         JNIEnv* /* env */, jclass /* 静态方法 */, jlong handle )
@@ -639,6 +602,41 @@ Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeForma
         default:
             return( 0 );
     }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeHardwareFormat(
+        JNIEnv* /* env */, jclass /* 静态方法 */, jlong handle )
+{
+    OboeStream* s = asStream( handle );
+    if( s == nullptr || !s->stream )
+    {
+        return( 0 );
+    }
+    switch( s->stream->getHardwareFormat())
+    {
+        case oboe::AudioFormat::I16:
+            return( kFormatI16 );
+        case oboe::AudioFormat::Float:
+            return( kFormatFloat );
+        case oboe::AudioFormat::I24:
+            return( kFormatI24Packed );
+        default:
+            return( 0 );
+    }
+}
+
+extern "C" JNIEXPORT jint JNICALL
+Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeOboeStream_nativeHardwareSampleRate(
+        JNIEnv* /* env */, jclass /* 静态方法 */, jlong handle )
+{
+    OboeStream* s = asStream( handle );
+    if( s == nullptr || !s->stream )
+    {
+        return( 0 );
+    }
+    const int32_t rate = s->stream->getHardwareSampleRate();
+    return( rate == oboe::kUnspecified ? 0 : rate );
 }
 
 /** 缓冲容量（帧）；0 = 拿不到。远大于请求值 = HAL 不接受小缓冲 */

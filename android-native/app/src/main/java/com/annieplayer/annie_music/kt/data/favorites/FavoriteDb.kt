@@ -464,6 +464,54 @@ internal class FavoriteDb(context: Context) :
         return inserted
     }
 
+    /**
+     * 批量追加（多选「加入到歌单」）：一个事务、两次查询，返回真的加进去的条数。
+     *
+     * 逐首调 [appendPlaylistSong] 是 N 个事务 + N 次 `MAX(position)` 查询；
+     * 这里先把已有的 key 一次读出来、游标一次算出来，再逐条插。
+     */
+    fun appendPlaylistSongs(playlistId: String, items: List<Pair<String, String>>): Int {
+        if (items.isEmpty()) return 0
+        val db = writableDatabase
+        var inserted = 0
+        db.beginTransaction()
+        try {
+            val existing = HashSet<String>(items.size)
+            db.query(
+                TABLE_PL_SONG,
+                arrayOf(COL_PS_SONG_KEY),
+                "$COL_PS_PLAYLIST_ID = ?",
+                arrayOf(playlistId),
+                null,
+                null,
+                null,
+            ).use { c ->
+                while (c.moveToNext()) existing.add(c.getString(0))
+            }
+            var nextPos = db.rawQuery(
+                "SELECT IFNULL(MAX($COL_PS_POSITION), -1) + 1 FROM $TABLE_PL_SONG " +
+                    "WHERE $COL_PS_PLAYLIST_ID = ?",
+                arrayOf(playlistId),
+            ).use { c -> if (c.moveToFirst()) c.getInt(0) else 0 }
+            for ((songKey, payload) in items) {
+                if (!existing.add(songKey)) continue
+                val values = ContentValues().apply {
+                    put(COL_PS_PLAYLIST_ID, playlistId)
+                    put(COL_PS_POSITION, nextPos)
+                    put(COL_PS_SONG_KEY, songKey)
+                    put(COL_PS_PAYLOAD, payload)
+                }
+                db.insertWithOnConflict(TABLE_PL_SONG, null, values, SQLiteDatabase.CONFLICT_REPLACE)
+                nextPos += 1
+                inserted += 1
+            }
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        return inserted
+    }
+
     fun removePlaylistSong(playlistId: String, songKey: String) {
         writableDatabase.delete(
             TABLE_PL_SONG,

@@ -127,7 +127,7 @@ fun SourcePickerSheet(
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(
-                        text = "搜索选择",
+                        text = "平台选择",
                         modifier = Modifier.weight(1f),
                         color = AppColors.white,
                         fontSize = AppFontSize.xl,
@@ -137,7 +137,7 @@ fun SourcePickerSheet(
                 }
                 // 类型标签
                 Text(
-                    text = "搜索音乐",
+                    text = "${options.size} 个平台",
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(start = AppSpacing.sp16, end = AppSpacing.sp16, bottom = AppSpacing.sp10),

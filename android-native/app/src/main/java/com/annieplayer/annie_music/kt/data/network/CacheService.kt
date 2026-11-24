@@ -74,7 +74,16 @@ object CacheService {
     // ---------------- 公开 API（调用点与 Flutter 完全同名） ----------------
 
     /** 读取缓存；过期即删除并返回 null，解析失败也返回 null */
+    private var forceReadWindowUntilMs: Long = 0L
+
+    fun openForceReadWindow(durationMs: Long = 5000L) {
+        forceReadWindowUntilMs = System.currentTimeMillis() + durationMs
+    }
+
+    fun forceReads(): Boolean = System.currentTimeMillis() < forceReadWindowUntilMs
+
     inline fun <reified T> get(key: String): T? {
+        if (forceReads()) return null
         return try {
             val raw = readRaw(key) ?: return null
             val entry = json.parseToJsonElement(raw) as? JsonObject ?: return null

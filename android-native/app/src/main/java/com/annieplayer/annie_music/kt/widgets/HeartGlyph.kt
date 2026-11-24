@@ -3,6 +3,7 @@ package com.annieplayer.annie_music.kt.widgets
 import androidx.compose.foundation.Canvas
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
@@ -61,5 +62,45 @@ fun HeartGlyph(
                 ),
             )
         }
+    }
+}
+
+/**
+ * 空心斜杠爱心（「取消收藏」）。
+ *
+ * 与 [HeartGlyph] **共用同一条爱心路径和描边规格**，只多一条 45° 斜杠（左上 → 右下）。
+ * 恒定中性色（[AppColors.glyphStrong]），不跟收藏状态变红：在收藏列表里每一行都已经是
+ * 「已收藏」，红心 + 斜杠读起来像「差一点」，而它表达的是「移除」。
+ */
+@Composable
+fun HeartOffGlyph(
+    modifier: Modifier = Modifier,
+    tint: Color = AppColors.glyphStrong,
+) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val path = Path().apply {
+            moveTo(w * 0.50f, h * 0.925f)
+            cubicTo(w * 0.415f, h * 0.85f, w * 0.075f, h * 0.625f, w * 0.075f, h * 0.365f)
+            cubicTo(w * 0.075f, h * 0.185f, w * 0.215f, h * 0.075f, w * 0.365f, h * 0.075f)
+            cubicTo(w * 0.44f, h * 0.075f, w * 0.487f, h * 0.15f, w * 0.50f, h * 0.265f)
+            cubicTo(w * 0.513f, h * 0.15f, w * 0.56f, h * 0.075f, w * 0.635f, h * 0.075f)
+            cubicTo(w * 0.785f, h * 0.075f, w * 0.925f, h * 0.185f, w * 0.925f, h * 0.365f)
+            cubicTo(w * 0.925f, h * 0.625f, w * 0.585f, h * 0.85f, w * 0.50f, h * 0.925f)
+            close()
+        }
+        drawPath(
+            path = path,
+            color = tint,
+            style = Stroke(width = w * 0.085f, cap = StrokeCap.Round, join = StrokeJoin.Round),
+        )
+        drawLine(
+            color = tint,
+            start = Offset(w * 0.20f, h * 0.20f),
+            end = Offset(w * 0.80f, h * 0.80f),
+            strokeWidth = w * 0.085f,
+            cap = StrokeCap.Round,
+        )
     }
 }

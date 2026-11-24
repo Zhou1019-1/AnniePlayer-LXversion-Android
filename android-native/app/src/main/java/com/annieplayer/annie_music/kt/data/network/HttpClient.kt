@@ -15,6 +15,8 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.ConnectionPool
+import okhttp3.Dispatcher
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
@@ -46,7 +48,21 @@ val globalOkHttp: OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(15, TimeUnit.SECONDS)
     .readTimeout(30, TimeUnit.SECONDS)
     .writeTimeout(15, TimeUnit.SECONDS)
+    .connectionPool(ConnectionPool(12, 5, TimeUnit.MINUTES))
+    .dispatcher(
+        Dispatcher().apply {
+            maxRequests = 64
+            maxRequestsPerHost = 16
+        },
+    )
     .build()
+
+val sharedConnectionPool: ConnectionPool get() = globalOkHttp.connectionPool
+
+fun downloadDispatcher(): Dispatcher = Dispatcher().apply {
+    maxRequests = 64
+    maxRequestsPerHost = 16
+}
 
 /**
  * 带重试的请求执行（对齐 Flutter `retryUntilSuccess`）。

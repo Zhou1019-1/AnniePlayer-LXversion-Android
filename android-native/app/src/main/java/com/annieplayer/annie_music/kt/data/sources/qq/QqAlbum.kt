@@ -29,6 +29,12 @@ suspend fun getQQAlbumSongs(albumMid: String): AlbumSongsPage {
         val pub = if (data is Map<*, *>) asText(data["aDate"]) else ""
         // 专辑流派（如 "Pop 流行"）
         val genre = if (data is Map<*, *>) asText(data["genre"]) else ""
+        // 唱片公司 / 版权方（同一响应里就有，写标签时当 `copyright` 用）
+        val company = if (data is Map<*, *>) {
+            decodeHtmlEntities(asText(data["company"])).trim()
+        } else {
+            ""
+        }
         // 专辑歌手在 `data.singer[]`（与 `list[].singer` 是「歌曲歌手」不同）
         val albumSingerRaw = if (data is Map<*, *>) data["singer"] else null
         val albumArtist = if (albumSingerRaw is List<*>) {
@@ -82,7 +88,7 @@ suspend fun getQQAlbumSongs(albumMid: String): AlbumSongsPage {
                 ),
             )
         }
-        return AlbumSongsPage(out, pub)
+        return AlbumSongsPage(out, pub, company)
     } catch (_: Throwable) {
         return AlbumSongsPage(emptyList())
     }

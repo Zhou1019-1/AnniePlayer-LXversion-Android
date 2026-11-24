@@ -8,8 +8,13 @@ import com.annieplayer.annie_music.kt.data.model.Album
 import com.annieplayer.annie_music.kt.data.model.MusicPlatform
 import com.annieplayer.annie_music.kt.data.model.Song
 
-/** Apple 发行物的两段：「全部专辑」页只进对应一段，而不是两段一起看。 */
-enum class AppleReleaseSection { singles, albums }
+/**
+ * 歌手作品的「全部」页只进其中一段：单曲 / EP，或专辑。
+ *
+ * 不叫 `AppleReleaseSection` 了 —— Apple 有接口自报分组，其它平台按曲目数推断，
+ * 但**页面的两段是同一套语义**，路由不该背平台名。
+ */
+enum class AlbumGroup { singlesEps, albums }
 
 /**
  * 把 [incoming] 按 id 追加到 [existing] 尾部（去重、保序）。
@@ -83,19 +88,30 @@ internal class SingerDetailCacheState {
 
     var avatarUrl by mutableStateOf("")
 
+    /** 动态头像的 HLS 地址（Apple 有 `motionArtist*` 才有；其它平台按名字去 Apple 查） */
+    var motionCover by mutableStateOf("")
+
+    /** 动态头像是否已经查过一次（空结果也算，避免每次重组都再查） */
+    var motionChecked by mutableStateOf(false)
+
     /** 歌手简介（各平台从已有的歌手接口顺带取；为空则整段不显示） */
     var bio by mutableStateOf("")
 
     val selectedSongs = mutableStateListOf<Song>()
 
-    /** 多选模式显式开关（长按行或头部「多选」chip 进入；「取消」/ 批量下载完成后退出）。 */
+    /** 多选模式显式开关（长按行或头部「多选」按钮进入；返回键 / 动作做完后退出）。 */
     var selectMode by mutableStateOf(false)
 
-    var batchPickerVisible by mutableStateOf(false)
-    var batchDownloading by mutableStateOf(false)
-
-    /** 批量下载进度文案（`MultiSelectDownloadBar` 下载中展示，形如 `3/12 歌名`）。 */
-    var batchProgress by mutableStateOf("")
+    /**
+     * 退出多选并清空已选。
+     *
+     * 「多选操作」抽屉的两个动作做完后由宿主调它 —— 选中状态存在这里、抽屉却在 `AppShell`，
+     * 只有这条路能把两边对齐。
+     */
+    fun clearSelection() {
+        selectedSongs.clear()
+        selectMode = false
+    }
 }
 
 /**

@@ -42,7 +42,6 @@ import com.annieplayer.annie_music.kt.data.favorites.FavSection
 import com.annieplayer.annie_music.kt.data.favorites.FavoriteMode
 import com.annieplayer.annie_music.kt.features.library.LocalCategory
 import com.annieplayer.annie_music.kt.features.library.LocalCategoryGlyph
-import com.annieplayer.annie_music.kt.features.library.LocalStaticBackdrop
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppFontSize
 import com.annieplayer.annie_music.kt.ui.theme.AppFontWeight
@@ -99,11 +98,6 @@ fun FavoritesScreen(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        // 与主页 / 本地曲库**同一条链路**（`LocalAmbientCoverUrl` + `LocalCoverThemePalette`）：
-        // 全局色板由 AppShell 算一次、切歌时补间，页面之间共享。
-        // 自己 `rememberCoverPalette(封面)` 是另一条链路 —— 每次进页面重新提取，
-        // 第一帧还是 fallback、提取完突变，看起来就是「这个页面要现变色」。
-        LocalStaticBackdrop(modifier = Modifier.fillMaxSize())
         Column(
             modifier = Modifier
                 .fillMaxSize()

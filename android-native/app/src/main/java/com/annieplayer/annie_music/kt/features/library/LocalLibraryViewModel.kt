@@ -7,17 +7,25 @@ import com.annieplayer.annie_music.kt.core.platform.MediaStoreScan
 import com.annieplayer.annie_music.kt.data.favorites.FavoriteStore
 import com.annieplayer.annie_music.kt.data.local.LocalFastProbe
 import com.annieplayer.annie_music.kt.data.local.LocalHeaderProbe
+import com.annieplayer.annie_music.kt.data.local.LocalGroupSets
 import com.annieplayer.annie_music.kt.data.local.LocalLibraryStore
 import com.annieplayer.annie_music.kt.data.local.LocalMediaScanner
+import com.annieplayer.annie_music.kt.data.local.LocalScanSettings
 import com.annieplayer.annie_music.kt.data.local.LocalSection
 import com.annieplayer.annie_music.kt.data.local.LocalSort
 import com.annieplayer.annie_music.kt.data.local.LocalTagLibProbe
 import com.annieplayer.annie_music.kt.data.local.LocalTagProbe
 import com.annieplayer.annie_music.kt.data.local.withTrueBitrate
+import com.annieplayer.annie_music.kt.data.local.isCacheFresh
+import com.annieplayer.annie_music.kt.data.local.tag.CoverBytes
+import com.annieplayer.annie_music.kt.data.local.tag.TagBag
+import com.annieplayer.annie_music.kt.data.local.tag.WriteResult
 import com.annieplayer.annie_music.kt.data.local.LocalTrackMeta
 import com.annieplayer.annie_music.kt.data.local.sortTracks
+import com.annieplayer.annie_music.kt.data.local.groupTracks
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.channels.Channel
@@ -74,6 +82,11 @@ class LocalLibraryViewModel : ViewModel() {
     }
     private val _state = MutableStateFlow(UiState())
     val state: StateFlow<UiState> = _state.asStateFlow()
+
+    private val _groups = MutableStateFlow(LocalGroupSets())
+    val groups: StateFlow<LocalGroupSets> = _groups.asStateFlow()
+
+    private var groupJob: Job? = null
 
     private var _job: Job? = null
 
@@ -134,6 +147,7 @@ class LocalLibraryViewModel : ViewModel() {
                 tracks = sortTracks(alive, _state.value.sort, _state.value.sortAscending),
                 scannedFiles = alive.size,
             )
+            scheduleGroups(_state.value.tracks, debounceMs = 0)
         }
         // 2) 再扫盘 + 补 tag
         refresh(appContext)
@@ -185,9 +199,11 @@ class LocalLibraryViewModel : ViewModel() {
                 // 3000 首会白跑 6000 次 `stat`（FUSE 上 0.1~0.2ms/次，合计 0.6~1s）。
                 val mtime = f.lastModified()
                 val size = f.length()
-                val c = cached[path]
-                if (!force && c != null && c.probed && c.mtime == mtime && c.size == size) {
-                    metas[path] = c
+                // 命中判据只在这里算一次（`isCacheFresh` 也是单测的对象 —— 它决定了
+                // 「改了标签 / 换了封面，重扫会不会更新」）
+                val reuse = if (force) null else cached[path]?.takeIf { isCacheFresh(it, mtime, size) }
+                if (reuse != null) {
+                    metas[path] = reuse
                 } else {
                     metas[path] = LocalTrackMeta.placeholder(f, mtime, size)
                     todo += f
@@ -200,15 +216,23 @@ class LocalLibraryViewModel : ViewModel() {
                 _probeAll(todo, metas, order)
             }
 
+            val all = order.mapNotNull { metas[it] }
+            val minSeconds = LocalScanSettings.minDurationSecondsNow
+            val kept = if (minSeconds <= 0) {
+                all
+            } else {
+                all.filter { it.duration <= 0 || it.duration >= minSeconds }
+            }
             val finalOrder = sortTracks(
-                order.mapNotNull { metas[it] },
+                kept,
                 _state.value.sort,
                 _state.value.sortAscending,
             )
             _state.value = _state.value.copy(tracks = finalOrder, scanning = false, pending = 0)
-            LocalLibraryStore.saveIndex(finalOrder)
-            LocalLibraryStore.updateMemoryIndex(finalOrder)
-            LocalLibraryStore.pruneCachedCovers(finalOrder)
+            scheduleGroups(finalOrder, debounceMs = 0)
+            LocalLibraryStore.saveIndex(all)
+            LocalLibraryStore.updateMemoryIndex(all)
+            LocalLibraryStore.pruneCachedCovers(all)
         }
     }
 
@@ -276,9 +300,12 @@ class LocalLibraryViewModel : ViewModel() {
      * 走 ffprobe（慢一点但准），结果写回 state 与缓存 —— 同一首只补一次。
      */
     fun enrich(path: String) {
-        if (_state.value.tracks.firstOrNull { it.path == path }?.bitDepth?.let { it > 0 } == true) return
+        val target = _state.value.tracks.firstOrNull { it.path == path } ?: return
+        if (target.bitDepth > 0) return
         viewModelScope.launch(Dispatchers.IO) {
-            val cover = LocalLibraryStore.coverFileFor(path)
+            // 封面输出名要带**当前文件戳**：ffprobe 抽图写的是这张封面，名字错了就会
+            // 1) 和按需抽取写到两个文件里，2) 之后被 prune 当孤儿删掉。
+            val cover = LocalLibraryStore.coverFileFor(target)
             val deep = LocalTagProbe.probe(path, coverOut = cover) ?: return@launch
             val tracks = _state.value.tracks.map { t ->
                 if (t.path != path) {
@@ -312,26 +339,27 @@ class LocalLibraryViewModel : ViewModel() {
      */
     fun deleteTrack(path: String, deleteFile: Boolean) {
         if (path.isBlank()) return
-        viewModelScope.launch(Dispatchers.IO) {
-            if (deleteFile) {
-                runCatching { MediaStoreScan.deleteFromMediaStore(path) }
-                runCatching { File(path).delete() }
-                runCatching { LocalLibraryStore.coverFileFor(path).delete() }
-                // 删了文件 = 用户不要这首歌了：把收藏与自建歌单里的引用一起撤掉。
-                // 不撤的话「我喜欢」会留一条点不开的幽灵（曲库和磁盘都没有这个文件了），
-                // 而且列表行没有爱心，用户想移除它还得先去播放页。
-                // 只从曲库移除（`deleteFile = false`）时不撤 —— 文件还在，收藏仍然有效。
-                runCatching { FavoriteStore.removeLocalSong(path) }
-            }
-            // 「最近播放」里那条要走，否则留下一条点不开的死链
-            LocalLibraryStore.removeRecentPlay(path)
-            _coverTouched.remove(path)
+        deleteTracks(listOf(path), deleteFile)
+    }
 
-            val tracks = _state.value.tracks.filterNot { it.path == path }
+    fun deleteTracks(paths: List<String>, deleteFile: Boolean) {
+        val targets = paths.filter { it.isNotBlank() }.distinct()
+        if (targets.isEmpty()) return
+        viewModelScope.launch(Dispatchers.IO) {
+            for (path in targets) {
+                if (deleteFile) {
+                    runCatching { MediaStoreScan.deleteFromMediaStore(path) }
+                    runCatching { File(path).delete() }
+                    runCatching { FavoriteStore.removeLocalSong(path) }
+                }
+                runCatching { LocalLibraryStore.deleteCoversFor(path) }
+                LocalLibraryStore.removeRecentPlay(path)
+                _coverTouched.remove(path)
+            }
+            val gone = targets.toHashSet()
+            val tracks = _state.value.tracks.filterNot { it.path in gone }
             _state.value = _state.value.copy(tracks = tracks)
             if (tracks.isEmpty()) {
-                // 删到空库：`saveIndex` 对空列表早退（不写空文件），所以改走 clearAll
-                // 把 index.json 与 covers/ 一起清掉，否则下次启动这些已删记录又冒出来。
                 LocalLibraryStore.clearAll()
             } else {
                 LocalLibraryStore.saveIndex(tracks)
@@ -339,7 +367,69 @@ class LocalLibraryViewModel : ViewModel() {
         }
     }
 
+    /**
+     * 把编辑页提交的标签写进文件，并把结果同步回内存列表。
+     *
+     * 与 [deleteTrack] 一样是「磁盘 + 内存 + 缓存」三处一起改；额外要清的是
+     * [_coverTouched] —— 写完封面缓存已经被删（文件戳变了），不清这个集合的话
+     * 可见行不会重新请求抽图，封面会永久空着。
+     *
+     * @return 写入结果；失败时**不动内存**（文件没变，列表也不该变）。
+     */
+    fun applyTagEdit(path: String, bag: TagBag, sidecarLrc: String? = null): WriteResult {
+        if (path.isBlank()) return WriteResult.fail("", "路径为空")
+        // 同步写：编辑页要拿 result 决定「关页面」还是「留在页内显示错误」，
+        // 异步就得再引入一个事件通道，得不偿失（一次原地写是几十毫秒）
+        return try {
+            val result = LocalLibraryStore.writeTags(path, bag)
+            if (!result.ok) return result
+            // `.lrc` 现在是独立按钮（[exportSidecarLyric]），整页保存不再顺带写它；
+            // 这个参数留给宿主兼容，正常恒为 null。
+            if (sidecarLrc != null) {
+                runCatching { LocalLibraryStore.writeSidecarLrc(path, sidecarLrc) }
+            }
+            val fresh = LocalLibraryStore.trackOf(path)
+            if (fresh != null) {
+                _coverTouched.remove(path)
+                _state.value = _state.value.copy(
+                    tracks = sortTracks(
+                        _state.value.tracks.map { if (it.path == path) fresh else it },
+                        _state.value.sort,
+                        _state.value.sortAscending,
+                    ),
+                )
+                // 写完标签封面缓存已被删（文件戳变了），而列表的「可见项变化」不会因为
+                // 数据更新而重新发射 —— 不主动补一次，封面会一直空着，直到用户重扫。
+                if (fresh.coverPath == null) requestCover(path)
+            }
+            result
+        } catch (t: Throwable) {
+            WriteResult.fail("", t.message ?: t.javaClass.simpleName)
+        }
+    }
+
     // ── 内部 ──
+
+    /**
+     * 编辑页「保存 .lrc」按钮：把**当前这版歌词**立刻写成同目录的 `{文件名}.lrc`。
+     *
+     * 与「保存」互不依赖：不写文件标签，也不改索引（歌词本身还没落进文件）。
+     */
+    fun exportSidecarLyric(path: String, lyric: String): Boolean =
+        LocalLibraryStore.writeSidecarLrc(path, lyric)
+
+    /**
+     * 编辑页「保存封面」按钮：把封面导出成同目录的 `cover.jpg` / `cover.png`。
+     *
+     * [cover] 是编辑页当次新选的那张（可能还没保存进文件）；null 则用文件里现有的内嵌图。
+     */
+    fun exportSidecarCover(path: String, cover: CoverBytes?): Boolean =
+        LocalLibraryStore.writeSidecarCover(path, cover)
+
+    /** DSD 容器：TagLib 读不了它们的 `ID3 ` / ID3v2 块，歌词只能由 [AnnieTag] 补 */
+    private fun isDsdPath(path: String): Boolean =
+        path.substringAfterLast('.', "").lowercase() in DSD_EXTS
+
     /** 并发补基础 tag；每读若干条刷一次界面 */
     private suspend fun _probeAll(
         todo: List<File>,
@@ -362,10 +452,18 @@ class LocalLibraryViewModel : ViewModel() {
                         if (meta == null) meta = LocalTagProbe.probe(path)
                         // TagLib/系统解析器都不给位深 → 纯 Kotlin 读文件头补齐（1~2ms，不引 native）
                         if (meta != null) meta = LocalHeaderProbe.fill(meta)
+                        // DSD 容器（dff / dsf）的 ID3 块 TagLib 不解析：只靠上面那三层降级，
+                        // 标题会回落成文件名、歌词永远是空（症状：写进去了、重扫完又没了）。
+                        // 整条记录用我们自己的 AnnieTag 补一次 —— 只对 DSD 做，不给全库加开销。
+                        if (meta != null && isDsdPath(path)) {
+                            meta = LocalLibraryStore.withAnnieTagFields(meta)
+                        }
                         // 封面是按需抽的，probe 拿不到路径：already-抽过的直接从 covers/ 捡回来，
                         // 否则重扫会把「有封面」变成「没封面」，还会被 prune 当成孤儿删掉。
+                        // 只认**当前文件戳**下的那张图（文件名带 mtime+size）—— 换了内嵌封面
+                        // 之后旧图名字对不上，这里自然拿不到，接着按需重抽。
                         if (meta != null && meta.coverPath == null) {
-                            val existing = LocalLibraryStore.existingCover(path)
+                            val existing = LocalLibraryStore.existingCover(meta)
                             if (existing != null) meta = meta.copy(coverPath = existing)
                         }
                         if (meta != null) {
@@ -394,9 +492,11 @@ class LocalLibraryViewModel : ViewModel() {
     private fun _loadCover(path: String) {
         val current = _state.value.tracks.firstOrNull { it.path == path } ?: return
         if (current.coverPath != null) return
-        val out = LocalLibraryStore.coverFileFor(path)
-        // 四级降级：TagLib 图片字节（最快）→ 系统 retriever → ffmpeg 抽帧 → 同目录 cover.jpg
-        val cover = LocalTagLibProbe.cover(path, out)
+        val out = LocalLibraryStore.coverFileFor(current)
+        // 五级降级：AnnieTag（DSD 专用，TagLib 认不出 dff/dsf 的 APIC）→ TagLib 图片字节
+        // （最快）→ 系统 retriever → ffmpeg 抽帧 → 同目录 cover.jpg
+        val cover = (if (isDsdPath(path)) LocalLibraryStore.coverFromTags(path, out) else null)
+            ?: LocalTagLibProbe.cover(path, out)
             ?: LocalFastProbe.extractCover(path, out)
             ?: LocalTagProbe.extractCover(path, out).takeIf { it }?.let { out.absolutePath }
             ?: LocalLibraryStore.sidecarCover(path)?.absolutePath
@@ -406,6 +506,7 @@ class LocalLibraryViewModel : ViewModel() {
                 if (t.path == path) t.copy(coverPath = cover) else t
             },
         )
+        scheduleGroups(_state.value.tracks, debounceMs = 800)
         // 抽到就落盘索引（节流：每 5 张写一次）。不写回的话，重启后封面路径全丢，
         // 表现就是「这次有封面、下次进来又没了」。
         if (coverPersistTick.incrementAndGet() % 5 == 0) {
@@ -426,6 +527,23 @@ class LocalLibraryViewModel : ViewModel() {
             scanning = scanning,
             pending = pending,
         )
+        scheduleGroups(list)
+    }
+
+    private fun scheduleGroups(tracks: List<LocalTrackMeta>, debounceMs: Long = 400) {
+        groupJob?.cancel()
+        if (tracks.isEmpty()) {
+            if (_groups.value.tracks != -1) _groups.value = LocalGroupSets()
+            return
+        }
+        val snapshot = tracks
+        groupJob = viewModelScope.launch(Dispatchers.Default) {
+            if (debounceMs > 0) delay(debounceMs)
+            val artists = groupTracks(snapshot, LocalSection.artists)
+            val albums = groupTracks(snapshot, LocalSection.albums)
+            val folders = groupTracks(snapshot, LocalSection.folders)
+            _groups.value = LocalGroupSets(artists, albums, folders, snapshot.size)
+        }
     }
 
     companion object {
@@ -439,5 +557,8 @@ class LocalLibraryViewModel : ViewModel() {
 
         /** 封面并发（抽图要解码，压低一些） */
         private const val COVER_CONCURRENCY = 2
+
+        /** DSD 容器扩展名（TagLib 不解析它们的标签块，歌词与文本标签只能走 [AnnieTag]） */
+        private val DSD_EXTS = setOf("dff", "dsf", "dsd")
     }
 }

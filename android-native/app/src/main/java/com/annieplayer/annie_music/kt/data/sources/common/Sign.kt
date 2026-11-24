@@ -8,12 +8,14 @@ package com.annieplayer.annie_music.kt.data.sources.common
 // 这里只放**纯函数**（无网络、无状态），所以能单测；拼 header / 发请求留在各平台文件里。
 
 /** MD5 十六进制**小写**（对齐 Dart `md5.convert(utf8.encode(x)).toString()`）。 */
-internal fun md5Hex(input: String): String {
+internal fun md5Hex(input: String): String = md5Hex(input.toByteArray(Charsets.UTF_8))
+
+internal fun md5Hex(bytes: ByteArray): String {
     val md = java.security.MessageDigest.getInstance("MD5")
-    val bytes = md.digest(input.toByteArray(Charsets.UTF_8))
+    val digest = md.digest(bytes)
     val hex = "0123456789abcdef"
-    val sb = StringBuilder()
-    for (b in bytes) {
+    val sb = StringBuilder(digest.size * 2)
+    for (b in digest) {
         val v = b.toInt() and 0xFF
         sb.append(hex[v ushr 4])
         sb.append(hex[v and 0x0F])

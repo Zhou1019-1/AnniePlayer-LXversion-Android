@@ -30,12 +30,19 @@ internal fun qqMediaMid(s: Map<String, Any?>): String? =
     asText(firstTruthy(listOf(qqDeep(s, "file", "media_mid"), s["media_mid"])))
         .takeIf { it.isNotEmpty() }
 
-/** 各档位字节数（QQ 的 `sizeflac`/`size320`/`size128` 值就是字节数；`file.*` 为备用字段） */
+private fun _sizeNew(s: Map<*, *>, index: Int): Long? {
+    val file = s["file"] as? Map<*, *> ?: return null
+    val arr = file["size_new"] as? List<*> ?: return null
+    val n = _numOrNull(arr.getOrNull(index)) ?: return null
+    return n.takeIf { it > 0L }
+}
+
 internal fun qqQualitySizes(s: Map<*, *>): Map<Quality, Long> {
     val file = s["file"] as? Map<*, *>
     val out = HashMap<Quality, Long>()
 
     fun take(q: Quality, vararg keys: String) {
+        if (q in out) return
         for (k in keys) {
             val n = _numOrNull(s[k]) ?: continue
             if (n > 0L) {
@@ -45,19 +52,30 @@ internal fun qqQualitySizes(s: Map<*, *>): Map<Quality, Long> {
         }
     }
 
+    fun fileTake(q: Quality, vararg keys: String) {
+        if (q in out || file == null) return
+        for (k in keys) {
+            val n = _numOrNull(file[k]) ?: continue
+            if (n > 0L) {
+                out[q] = n
+                return
+            }
+        }
+    }
+
+    fun newTake(q: Quality, index: Int) {
+        if (q in out) return
+        _sizeNew(s, index)?.let { out[q] = it }
+    }
+
     take(Quality.flac, "sizeflac", "size_flac")
     take(Quality.k320k, "size320", "size_320mp3")
     take(Quality.k128k, "size128", "size_128mp3")
-    if (file != null) {
-        fun fileTake(q: Quality, key: String) {
-            if (q in out) return
-            val n = _numOrNull(file[key]) ?: return
-            if (n > 0L) out[q] = n
-        }
-        fileTake(Quality.flac, "size_flac")
-        fileTake(Quality.k320k, "size_320mp3")
-        fileTake(Quality.k128k, "size_128mp3")
-    }
+    fileTake(Quality.flac, "size_flac")
+    fileTake(Quality.k320k, "size_320mp3")
+    fileTake(Quality.k128k, "size_128mp3")
+    newTake(Quality.flac, 1)
+    newTake(Quality.k320k, 3)
     return out
 }
 
@@ -69,10 +87,16 @@ internal fun qqQualitySizes(s: Map<*, *>): Map<Quality, Long> {
  */
 internal fun qqQualities(s: Map<String, Any?>): List<Quality> {
     val out = mutableListOf<Quality>()
-    if (jsTruthy(firstTruthy(listOf(s["sizeflac"], qqDeep(s, "file", "size_flac"))))) {
+    if (
+        jsTruthy(firstTruthy(listOf(s["sizeflac"], qqDeep(s, "file", "size_flac")))) ||
+        _sizeNew(s, 1) != null
+    ) {
         out.add(Quality.flac)
     }
-    if (jsTruthy(firstTruthy(listOf(s["size320"], qqDeep(s, "file", "size_320mp3"))))) {
+    if (
+        jsTruthy(firstTruthy(listOf(s["size320"], qqDeep(s, "file", "size_320mp3")))) ||
+        _sizeNew(s, 3) != null
+    ) {
         out.add(Quality.k320k)
     }
     if (jsTruthy(firstTruthy(listOf(s["size128"], qqDeep(s, "file", "size_128mp3"))))) {

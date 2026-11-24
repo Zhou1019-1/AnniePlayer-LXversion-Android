@@ -1,7 +1,7 @@
 package com.annieplayer.annie_music.kt.core.audio.dsd
 
 import com.annieplayer.annie_music.kt.core.audio.DsdLevel
-import com.annieplayer.annie_music.kt.core.audio.OutputPath
+import com.annieplayer.annie_music.kt.core.audio.SinkKind
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -13,10 +13,11 @@ class DsdTransportPlanTest {
     private fun decide(
         wanted: DsdTransport,
         level: DsdLevel? = DsdLevel.dsd64,
-        path: OutputPath = OutputPath.usbDirect,
+        sink: SinkKind = SinkKind.usbUac,
         routingKnown: Boolean = true,
         caps: UsbDacCaps? = UsbDacCaps(pcmRates = null, hasRawAlt = true),
-    ) = decideDsdTransport(wanted, level, path, routingKnown, caps)
+        dapNativeReady: Boolean = false,
+    ) = decideDsdTransport(wanted, level, sink, routingKnown, caps, dapNativeReady)
 
     @Test
     fun `帧率换算按各自的分频`() {
@@ -53,15 +54,194 @@ class DsdTransportPlanTest {
     }
 
     @Test
-    fun `系统通路会改写 DoP 帧标记`() {
-        val d = decide(DsdTransport.dop, path = OutputPath.systemMix)
+    fun `DAP 内置 DAC 没实测过时不盲试 Native——退 PCM 并说明`() {
+        // 私有 audio_format_t 建轨失败可能是静音、也可能是 HAL 崩；没实测就不碰。
+        // 内置 DAC 没有 UAC 描述符可读，所以 caps 恒为 null。
+        //
+        // **不再退 DoP**：DoP 要 24 bit 帧 + 逐字节保真，而内置 DAC 只认私有 format；
+        // 送不进去就落到系统混音，帧标记被 float 音量乘法改掉 —— 实测听感是
+        // 「歌能听见但一直有白噪」。宁可给干净 PCM。
+        val d = decide(
+            DsdTransport.native,
+            sink = SinkKind.dsdDirect,
+            caps = null,
+            dapNativeReady = false,
+        )
+        assertEquals(DsdTransport.pcm, d.transport)
+        assertEquals(DsdDowngradeReason.DapNotMeasured, d.reason)
+    }
+
+    @Test
+    fun `DAP 内置 DAC 实测通过后 Native 成立`() {
+        val d = decide(
+            DsdTransport.native,
+            sink = SinkKind.dsdDirect,
+            caps = null,
+            dapNativeReady = true,
+        )
+        assertEquals(DsdTransport.native, d.transport)
+        assertNull(d.reason)
+    }
+
+    @Test
+    fun `DAP 内置 DAC 上 DoP 不可用——PCM 端口拿不到，只会落进 float 混音器`() {
+        // 这条改过两次，两次都不是猜的，而是实测推翻了上一版：
+        //  · 最早：一律降 PCM，理由是"内置 DAC 只认私有 format"（当时没有 PCM 端口）。
+        //  · 中间一版：以为有 DIRECT PCM 端口就成立，于是放行 DoP —— 结果变成**纯噪音**。
+        //  · 现在：实测证明 PCM 格式的 DIRECT 请求被 policy 静默降级到 deep_buffer
+        //    （`AudioFlinger: requested flags (00000008) and output flags (00000008)`），
+        //    轨落在 176400 / PCM_FLOAT 的混音线程上，`0x05/0xFA` 标记被 float 乘法改写。
+        //    附加伤害：那次建流把共享输出重配成 176400 且不恢复，之后每首普通歌都被重采样。
+        //
+        // 判据不是"有没有 PORT"，而是"能不能拿到**逐字节保真**的端口"—— 拿不到就不能放行。
+        val d = decide(DsdTransport.dop, sink = SinkKind.dsdDirect, caps = null)
         assertEquals(DsdTransport.pcm, d.transport)
         assertEquals(DsdDowngradeReason.PathNotBitExact, d.reason)
     }
 
     @Test
+    fun `AAudio 独占不算逐字节保真——那要看回读结果`() {
+        // `isBitExact` 只认 usbDirect / dapDirect。AAudio 是否保真由 `AaudioSink`
+        // 校验回读率与格式得出，是运行时结论，不能写成静态属性。
+        val d = decide(DsdTransport.dop, sink = SinkKind.oboe)
+        assertEquals(DsdTransport.pcm, d.transport)
+        assertEquals(DsdDowngradeReason.PathNotBitExact, d.reason)
+    }
+
+    @Test
+    fun `DoP 帧在 AAudio 独占探测成立时成立`() {
+        val d = decideDsdTransport(
+            wanted = DsdTransport.dop,
+            level = DsdLevel.dsd64,
+            sink = SinkKind.oboe,
+            routingKnown = true,
+            caps = null,
+            aaudioDopReady = true,
+        )
+        assertEquals(DsdTransport.dop, d.transport)
+        assertEquals(null, d.reason)
+    }
+
+    @Test
+    fun `DoP 帧率没被探测判成独占时不许走 AAudio`() {
+        val d = decideDsdTransport(
+            wanted = DsdTransport.dop,
+            level = DsdLevel.dsd64,
+            sink = SinkKind.oboe,
+            routingKnown = true,
+            caps = null,
+            aaudioDopReady = false,
+        )
+        assertEquals(DsdTransport.pcm, d.transport)
+        assertEquals(DsdDowngradeReason.PathNotBitExact, d.reason)
+    }
+
+    @Test
+    fun `native 永远不走 AAudio——它只有私有 format`() {
+        val d = decideDsdTransport(
+            wanted = DsdTransport.native,
+            level = DsdLevel.dsd64,
+            sink = SinkKind.oboe,
+            routingKnown = true,
+            caps = null,
+            aaudioDopReady = true,
+        )
+        assertEquals(DsdTransport.pcm, d.transport)
+        assertEquals(DsdDowngradeReason.PathNotBitExact, d.reason)
+    }
+
+    @Test
+    fun `要 native 但私有 format 不可用时退到 DoP over AAudio`() {
+        val d = resolveDsdChain(
+            wanted = DsdTransport.native,
+            level = DsdLevel.dsd64,
+            sink = SinkKind.oboe,
+            routingKnown = true,
+            caps = null,
+            dapNativeReady = false,
+            aaudioDopReady = true,
+        )
+        assertEquals(DsdTransport.dop, d.transport)
+    }
+
+    @Test
+    fun `系统通路会改写 DoP 帧标记`() {
+        val d = decide(DsdTransport.dop, sink = SinkKind.audioTrack)
+        assertEquals(DsdTransport.pcm, d.transport)
+        assertEquals(DsdDowngradeReason.PathNotBitExact, d.reason)
+    }
+
+    // ── 通路判定：用户意图 + 实测 ──────────────────────────────────────────────
+
+    @Test
+    fun `内置 DAC 实测成立时 dsdSinkFor 给 dsdDirect`() {
+        assertEquals(
+            SinkKind.dsdDirect,
+            dsdSinkFor(usbExclusive = false, measured = SinkKind.audioTrack, dapReady = true),
+        )
+    }
+
+    @Test
+    fun `没实测到就落 audioTrack`() {
+        assertEquals(
+            SinkKind.audioTrack,
+            dsdSinkFor(usbExclusive = false, measured = SinkKind.audioTrack, dapReady = false),
+        )
+    }
+
+    @Test
+    fun `实测通过的内置 DAC 不因为路由还没上报而降级`() {
+        // **这条挡的是一个真实的顺序 bug。**
+        //
+        // 判定函数里 `routingKnown` 曾经排在 `dapDirect` 分支之前：启动后第一次判定时
+        // 路由还没上报（`_routing == null`），于是直接判 PCM —— 用户选了 native、
+        // 探测也实测通过，输出却显示「DSD → PCM」，而且再无机会纠正
+        // 因为 PCM 那条路不会失败、不会触发重建。
+        //
+        // 内置 DAC 的保真是**探测证明**的（真开流 + 持续排空），不依赖路由上报。
+        val d = decide(
+            DsdTransport.native,
+            sink = SinkKind.dsdDirect,
+            routingKnown = false,
+            caps = null,
+            dapNativeReady = true,
+        )
+        assertEquals(DsdTransport.native, d.transport)
+        assertNull(d.reason)
+    }
+
+    @Test
+    fun `系统通路仍然要求先测到路由`() {
+        // 反例：别的通路的保真只能由路由上报确认，没上报就必须降（保持原语义）。
+        val d = decide(DsdTransport.dop, sink = SinkKind.audioTrack, routingKnown = false)
+        assertEquals(DsdTransport.pcm, d.transport)
+        assertEquals(DsdDowngradeReason.NotMeasured, d.reason)
+    }
+
+    @Test
+    fun `内置 DAC 没实测过时，路由未上报也照实说没测到`() {
+        val d = decide(
+            DsdTransport.native,
+            sink = SinkKind.dsdDirect,
+            routingKnown = false,
+            caps = null,
+            dapNativeReady = false,
+        )
+        assertEquals(DsdTransport.pcm, d.transport)
+        assertEquals(DsdDowngradeReason.DapNotMeasured, d.reason)
+    }
+
+    @Test
+    fun `USB 独占开启时 dsdSinkFor 不改写实测值`() {
+        assertEquals(
+            SinkKind.usbUac,
+            dsdSinkFor(usbExclusive = true, measured = SinkKind.usbUac, dapReady = true),
+        )
+    }
+
+    @Test
     fun `AAudio 独占当前不当作保真通路`() {
-        val d = decide(DsdTransport.native, path = OutputPath.aaudioExclusive)
+        val d = decide(DsdTransport.native, sink = SinkKind.oboe)
         assertEquals(DsdTransport.pcm, d.transport)
         assertEquals(DsdDowngradeReason.PathNotBitExact, d.reason)
     }
@@ -184,11 +364,11 @@ class DsdTransportPlanTest {
     private fun chain(
         wanted: DsdTransport,
         level: DsdLevel? = DsdLevel.dsd64,
-        path: OutputPath = OutputPath.usbDirect,
+        sink: SinkKind = SinkKind.usbUac,
         routingKnown: Boolean = true,
         caps: UsbDacCaps? = UsbDacCaps(pcmRates = null, hasRawAlt = true),
         failed: Set<DsdTransport> = emptySet(),
-    ) = resolveDsdChain(wanted, level, path, routingKnown, caps) { it in failed }
+    ) = resolveDsdChain(wanted, level, sink, routingKnown, caps) { it in failed }
 
     @Test
     fun `Native 没有 raw 通道时落到 DoP 而不是 PCM`() {
@@ -238,7 +418,7 @@ class DsdTransportPlanTest {
     @Test
     fun `通路不保真时两条都是 PCM`() {
         // DoP 也要逐字节保真，通路不成立就没得选 —— 但在结论上仍报通路原因
-        val d = chain(DsdTransport.native, path = OutputPath.systemMix)
+        val d = chain(DsdTransport.native, sink = SinkKind.audioTrack)
         assertEquals(DsdTransport.pcm, d.transport)
         assertEquals(DsdDowngradeReason.PathNotBitExact, d.reason)
     }

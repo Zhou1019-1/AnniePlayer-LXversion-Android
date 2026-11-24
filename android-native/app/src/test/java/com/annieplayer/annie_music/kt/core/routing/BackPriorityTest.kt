@@ -15,17 +15,15 @@ import org.junit.Test
  */
 class BackPriorityTest {
 
-    /** 搜索页的两个状态：待下载面板 > 多选态 > 搜索态（一次返回只退一层）。 */
+    /** 搜索页的两个状态：多选态 > 搜索态（一次返回只退一层）。 */
     @Test
-    fun `search selection layers sit between page and search`() {
+    fun `search selection sits between page and search`() {
         val page = BACK_PRIORITY.indexOf(BackTarget.PAGE)
-        val overlay = BACK_PRIORITY.indexOf(BackTarget.SEARCH_SELECTION_OVERLAY)
         val selection = BACK_PRIORITY.indexOf(BackTarget.SEARCH_SELECTION)
         val search = BACK_PRIORITY.indexOf(BackTarget.SEARCH)
 
-        assertTrue("三个目标都必须登记在表里", listOf(page, overlay, selection, search).all { it >= 0 })
-        assertTrue("详情页必须先于搜索页的任何状态", page < overlay)
-        assertTrue("待下载面板要先于多选态", overlay < selection)
+        assertTrue("三个目标都必须登记在表里", listOf(page, selection, search).all { it >= 0 })
+        assertTrue("详情页必须先于搜索页的任何状态", page < selection)
         assertTrue("多选态要先于搜索态本身", selection < search)
     }
 
@@ -36,19 +34,24 @@ class BackPriorityTest {
     }
 
     @Test
-    fun `pending download overlay consumes back before selection mode`() {
-        val flags = OverlayVisibilityFlags(
-            searchSelectionOverlay = true,
-            searchSelection = true,
-        )
-        assertEquals(BackTarget.SEARCH_SELECTION_OVERLAY, handleBack(flags))
+    fun `multi select sheet consumes back before the page underneath`() {
+        // 抽屉由 AppShell 渲染在页面栈之上：开着时详情页 / 歌手页都不许再吃返回，
+        // 否则页面会在抽屉背后把自己的多选态悄悄清掉（表现为「返回键没反应」）。
+        val flags = OverlayVisibilityFlags(page = true, multiSelect = true)
+        assertEquals(BackTarget.MULTI_SELECT, handleBack(flags))
+    }
+
+    @Test
+    fun `quality picker wins over multi select sheet`() {
+        // 抽屉里的「下载」先关抽屉再弹面板，两者本不会同时可见；万一同时可见，先关面板。
+        val flags = OverlayVisibilityFlags(qualityPicker = true, multiSelect = true)
+        assertEquals(BackTarget.QUALITY_PICKER, handleBack(flags))
     }
 
     @Test
     fun `open detail page still wins over search selection`() {
         val flags = OverlayVisibilityFlags(
             page = true,
-            searchSelectionOverlay = true,
             searchSelection = true,
             searchExpanded = true,
         )

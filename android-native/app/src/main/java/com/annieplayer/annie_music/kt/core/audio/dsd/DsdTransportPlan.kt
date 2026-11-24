@@ -1,7 +1,7 @@
 package com.annieplayer.annie_music.kt.core.audio.dsd
 
 import com.annieplayer.annie_music.kt.core.audio.DsdLevel
-import com.annieplayer.annie_music.kt.core.audio.OutputPath
+import com.annieplayer.annie_music.kt.core.audio.SinkKind
 
 /**
  * DoP / Native 的可行性判定 —— **纯函数，可 JVM 单测**。
@@ -61,6 +61,13 @@ enum class DsdDowngradeReason(val label: String, val advice: String) {
      * 否则播过一首 DSD512 就会把整台设备的 Native 永久否掉。
      */
     TransportFailed("这个档位刚在设备上失败过", "已自动改用更低一级的方式"),
+    /**
+     * DAP 内置 DAC 的直通还没测过。
+     *
+     * 没实测就建私有 `audio_format_t` 的轨，最坏情况是 HAL 收下但解不出声（静音或满幅噪声），
+     * 最坏情况是 HAL 在 `set()` 里崩 —— 所以「没测过」必须降级，不能当"可以试"。
+     */
+    DapNotMeasured("内置 DAC 直通这次没成立", "可改用 DoP，或改成 DSD 转 PCM"),
 }
 
 data class DsdTransportDecision(
@@ -83,28 +90,77 @@ val DsdLevel.dopFrameRate: Int get() = bitRate / DOP_FRAME_DIVISOR
 /** Native 的 word 率（Hz）。DSD64 → 88200、DSD128 → 176400、DSD256 → 352800、DSD512 → 705600 */
 val DsdLevel.nativeWordRate: Int get() = bitRate / NATIVE_WORD_DIVISOR
 
-/**
- * 意图 + 通路 + 设备能力 → 这一次真正能用的传输方式。
- *
- * @param wanted 用户意图（由 `DsdOutputMode` 映射而来）
- * @param level 曲目档位；`null` = 不是 DSD（此时恒为 [DsdTransport.pcm]）
- * @param path **实测**通路，不是设置里的意图
- * @param routingKnown 是否已经测到通路；false 时一律降 [DsdTransport.pcm]
- * @param caps USB 直连时读到的 DAC 能力；`null` = 还没读
- */
+fun dsdSinkFor(
+    usbExclusive: Boolean,
+    measured: SinkKind,
+    dapReady: Boolean,
+): SinkKind {
+    if (usbExclusive) return measured
+    if (measured == SinkKind.dsdDirect) return measured
+    return if (dapReady) SinkKind.dsdDirect else SinkKind.audioTrack
+}
+
 fun decideDsdTransport(
     wanted: DsdTransport,
     level: DsdLevel?,
-    path: OutputPath,
+    sink: SinkKind,
     routingKnown: Boolean,
     caps: UsbDacCaps?,
+    dapNativeReady: Boolean = false,
+    aaudioDopReady: Boolean = false,
 ): DsdTransportDecision {
     if (level == null) return DsdTransportDecision(DsdTransport.pcm)
     if (wanted == DsdTransport.pcm) return DsdTransportDecision(DsdTransport.pcm)
+
+    if (sink == SinkKind.oboe) {
+        return when (wanted) {
+            DsdTransport.dop -> if (aaudioDopReady) {
+                DsdTransportDecision(DsdTransport.dop)
+            } else {
+                DsdTransportDecision(DsdTransport.pcm, DsdDowngradeReason.PathNotBitExact)
+            }
+            DsdTransport.native -> DsdTransportDecision(
+                DsdTransport.pcm,
+                DsdDowngradeReason.PathNotBitExact,
+            )
+            DsdTransport.pcm -> DsdTransportDecision(DsdTransport.pcm)
+        }
+    }
+
+    if (sink == SinkKind.dsdDirect) {
+        return when (wanted) {
+            DsdTransport.native -> if (dapNativeReady) {
+                DsdTransportDecision(DsdTransport.native)
+            } else {
+                DsdTransportDecision(DsdTransport.pcm, DsdDowngradeReason.DapNotMeasured)
+            }
+            // **DoP 在内置 DAC 上不可用**，而且这不是"还没试对参数"。
+            //
+            // 实测（JM21）：DoP 的帧是 24 bit PCM @176400，所以它只能走 **PCM 端口**；
+            // 而公开 PCM 格式请求 `AUDIO_OUTPUT_FLAG_DIRECT` / `0x2001` 在这台机器上被
+            // policy 静默降级到 `deep_buffer`：
+            //   `AudioFlinger: createTrack_l(): requested flags (00000008) and output flags (00000008)`
+            // 那条轨随后出现在 **176400 / PCM_FLOAT 的混音线程**上（`type 0 (MIXER)`），
+            // `0x05/0xFA` 标记被那一次 float 乘法整片改写 —— 听感是**纯噪音**。
+            // 更要命的副作用：这次建流把共享输出线程重配成 176400 并且**不再恢复**，
+            // 之后每一首普通歌都被它重采样（实测：重启后 48k，播完 DSD 后变 176.4k）。
+            //
+            // 私有 format（native）之所以能出声，是因为它在 `deep_buffer` 里没有对应
+            // profile，policy 无处可落，只能真开 `direct_pcm`。DoP 没有这种私有值可用
+            // （AOSP 与这台 HAL 都没有 DoP 的 `audio_format_t`）。
+            DsdTransport.dop -> DsdTransportDecision(
+                DsdTransport.pcm,
+                DsdDowngradeReason.PathNotBitExact,
+            )
+            DsdTransport.pcm -> DsdTransportDecision(DsdTransport.pcm)
+        }
+    }
+
     if (!routingKnown) return DsdTransportDecision(DsdTransport.pcm, DsdDowngradeReason.NotMeasured)
-    if (path != OutputPath.usbDirect) {
+    if (sink != SinkKind.usbUac) {
         return DsdTransportDecision(DsdTransport.pcm, DsdDowngradeReason.PathNotBitExact)
     }
+
     if (caps == null) {
         // 能力未知时两条路分开对待，因为「未知」对它们的含义不同：
         //
@@ -156,24 +212,40 @@ fun decideDsdTransport(
 fun resolveDsdChain(
     wanted: DsdTransport,
     level: DsdLevel?,
-    path: OutputPath,
+    sink: SinkKind,
     routingKnown: Boolean,
     caps: UsbDacCaps?,
+    dapNativeReady: Boolean = false,
+    aaudioDopReady: Boolean = false,
     failed: (DsdTransport) -> Boolean = { false },
 ): DsdTransportDecision {
     var reason: DsdDowngradeReason? = null
     for (candidate in DsdTransport.fallbackChain(wanted)) {
         if (candidate == DsdTransport.pcm) break
         if (failed(candidate)) {
+            // **一旦"想要的那一级刚失败过"，就以它为准。**
+            // 后面那些候选的理由是"它自己也做不到"，信息量更低：实测被它盖成
+            // `DapNotMeasured`（看上去像"没测过"），而真相是 native 开流失败了 ——
+            // 两者要查的地方完全不同。
             reason = DsdDowngradeReason.TransportFailed
             continue
         }
-        val d = decideDsdTransport(candidate, level, path, routingKnown, caps)
+        val d = decideDsdTransport(
+            candidate,
+            level,
+            sink,
+            routingKnown,
+            caps,
+            dapNativeReady,
+            aaudioDopReady,
+        )
         // 判定返回的 transport 就是"它自己能做到的那一级"；等于 candidate 才算成立
         if (d.transport == candidate) {
             return DsdTransportDecision(candidate, if (candidate == wanted) null else reason)
         }
-        reason = d.reason ?: reason
+        if (reason != DsdDowngradeReason.TransportFailed) {
+            reason = d.reason ?: reason
+        }
     }
     return DsdTransportDecision(DsdTransport.pcm, reason)
 }

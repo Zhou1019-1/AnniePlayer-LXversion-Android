@@ -24,6 +24,8 @@ data class PlaylistResult(
     val cover: String,
     val platform: MusicPlatform,
     val songs: List<Song>,
+    val tallCover: String = "",
+    val motionCover: String = "",
 )
 
 /** 歌单链接解析结果（对齐 Dart 返回记录 `({MusicPlatform platform, String id})`） */
@@ -173,6 +175,8 @@ object PlaylistService {
                 cover = result.cover,
                 platform = MusicPlatform.apple,
                 songs = result.songs,
+                tallCover = result.tallCover,
+                motionCover = result.motionCover,
             )
         }
         MusicPlatform.kkbox -> getKkboxPlaylist(id)?.let { result ->

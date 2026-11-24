@@ -6,12 +6,12 @@ import androidx.media3.common.audio.SonicAudioProcessor
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.audio.AudioSink
+import com.annieplayer.annie_music.kt.core.audio.dap.DapDirectOutput
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import androidx.media3.exoplayer.audio.SilenceSkippingAudioProcessor
 import com.annieplayer.annie_music.kt.core.audio.dsp.PcmResamplerAudioProcessor
 import com.annieplayer.annie_music.kt.core.audio.dsp.TuningAudioProcessor
 import com.annieplayer.annie_music.kt.core.audio.ffmpeg.FfmpegAudioRenderer
-import com.annieplayer.annie_music.kt.core.state.MoreSettings
 
 /**
  * 自定义 RenderersFactory：DSP 放在 AudioSink 外层，时钟/位置仍交给 DefaultAudioSink。
@@ -29,6 +29,12 @@ class AnnieRenderersFactory(context: Context) : DefaultRenderersFactory(context)
      * offload 直通"—— 那条功能已整条删除，现在没有"让位"这回事了。
      */
     var routeProvider: (() -> AudioRoute?)? = null
+
+    var outputDeviceIdProvider: (() -> Int)? = null
+
+    var policyProvider: (() -> PlaybackPolicy)? = null
+
+    private fun policy(): PlaybackPolicy = policyProvider?.invoke() ?: PlaybackPolicy()
 
     /**
      * AAudio / USB 独占中途失败时的回调：由播放层重建音源。
@@ -51,7 +57,7 @@ class AnnieRenderersFactory(context: Context) : DefaultRenderersFactory(context)
     var outputRequest: (() -> OutputRequest)? = null
 
     /** 实际生效通路 / 降级原因 / 端点位深：播放层写进 `AudioOutputStatus` */
-    var onSinkRouting: ((OutputPath, DowngradeNotice?, Int) -> Unit)? = null
+    var onSinkRouting: ((SinkKind, DowngradeNotice?, Int) -> Unit)? = null
 
     /**
      * 播放器此刻**想不想播**（`Player.playWhenReady`）。
@@ -60,6 +66,53 @@ class AnnieRenderersFactory(context: Context) : DefaultRenderersFactory(context)
      * 前者不许被自愈或故障上报拉起来，后者必须。默认视为想播（自愈保持原行为）。
      */
     var playIntent: (() -> Boolean)? = null
+
+    var playIntentAt: (() -> Long)? = null
+
+    /**
+     * 独占通路里还有多少微秒没播出去（`0` = 没有）。
+     *
+     * 存在的理由：换曲时我们会在播放线程上**等环排空**（约 2 s），这段里
+     * `ExoPlayer.getCurrentPosition()` 不再刷新，界面进度条会停在"结尾前 2 秒"。
+     * 有了这个数，进度侧就能判断"已经进尾段"，把进度钉到时长。每次 `buildAudioSink` 覆盖一次。
+     */
+    var pendingAudioUs: (() -> Long)? = null
+
+    /**
+     * DAP 内置 DAC 直通的开流入口（`null` = 这台机器不走这条路）。
+     *
+     * 由 `MediaPlayerBackend` 注入：它知道实测结论（`DapCapability`）与用户选了什么，
+     * 这里只负责把 `Format` 递过去。返回 `null` 就继续走系统通路。
+     */
+    internal var dapOpener: ((androidx.media3.common.Format) -> DapDirectOutput?)? = null
+
+    internal var dapNativeReady: (() -> Boolean)? = null
+
+    /**
+     * 内置 DAC 这条流**这次没开成**（`dapOpener` 返回了 null，或 `open()` 失败，或 raw 帧
+     * 根本没有消费者）。
+     *
+     * 三种情况其实是同一件事：这一档的 native 现在走不了。由播放层记住并按 PCM 重建音源，
+     * 否则每首歌都会再撞一次 —— 而撞的代价是满幅噪声。
+     */
+    internal var onDapOpenFailed: (() -> Unit)? = null
+
+    /**
+     * 立刻拆掉内置 DAC 那条流（并让厂商 HAL 复位回 PCM）。
+     *
+     * 由播放层在**切到非 DSD 曲目之前**调用：DSD 流只 pause 不 release 时，厂商 HAL
+     * 会一直停在 DSD 模式，之后每首 PCM 都被重采样到它的 hwRate（实测 176.4 kHz）。
+     */
+    internal var releaseDapNow: (() -> Unit)? = null
+
+    /**
+     * 这一首送的是不是 **raw DSD 帧**（native / DoP）。
+     *
+     * 系统通路的 `PcmAudioSink` 也要知道：raw 帧一个字节都不能进处理器链
+     * （重采样会把它当 PCM 算，格式也会被改写成 24 bit，内置 DAC 那边就不认了）。
+     * 由 `MediaPlayerBackend` 用本首的实测传输方式填。
+     */
+    internal var rawFrames: (() -> Boolean)? = null
 
     init {
         setEnableAudioFloatOutput(true)
@@ -168,8 +221,7 @@ class AnnieRenderersFactory(context: Context) : DefaultRenderersFactory(context)
         //
         // 直通不在这里做分流：压缩帧是否让位由 `buildAudioRenderers` 里的
         // `yieldForOffload` 决定，交货仍然是 `DefaultAudioSink.setOffloadMode(ENABLED)`。
-        if ((com.annieplayer.annie_music.kt.core.audio.AudioDirectProbe.AAUDIO_SINK_ENABLED &&
-                com.annieplayer.annie_music.kt.core.audio.dsp.NativeAaudio.isAvailable()) ||
+        if (com.annieplayer.annie_music.kt.core.audio.dsp.NativeOboeStream.available() ||
             UsbAudioDirect.platformReady()
         ) {
             // 这一次 configure 的输入：sink 与 PcmAudioSink 共用同一个快照来源。
@@ -192,22 +244,26 @@ class AnnieRenderersFactory(context: Context) : DefaultRenderersFactory(context)
                     // 退到 AAudio 独占兜底，却先被这一句判成 Denied，直接掉进系统 mixe r——
                     // 表现就是「选了 USB 独占、DSD 页却说需要 USB 直连」。
                     // 蓝牙仍然排除：a2dp 没有 mmap 端点，试也只会白失败一次。
-                    MoreSettings.outputPath.value != OutputPath.systemMix &&
+                    //
+                    // **「播放器内置 DAC」必须排除。** 它是"用这台机器自己的 DAC"，不是
+                    // "随便找一条独占"：AAudio 独占在 `configure()` 里排在 `dapOpener`
+                    // **之前**，一旦放它进来就会先开出一条 AAudio 流把内置 DAC 顶掉，
+                    // 用户看到的是「实际：AAudio 独占」—— 选什么都没选对。
+                    !policy().usbExclusive &&
                         routeProvider?.invoke() != AudioRoute.bluetooth
-                },
-                // 独占中途失败（设备被抢/写不进）→ 由播放层重建音源；
+                },                // 独占中途失败（设备被抢/写不进）→ 由播放层重建音源；
                 // 那时该率已被标记不可独占，下一次 configure 会选中系统引擎。
                 onEngineFailure = { reason, tag -> onAaudioFailure?.invoke(reason, tag) },
                 // USB 独占：拿不到会话就返回 null，`configure()` 退回 AAudio 再退系统通路
                 engineSelector = {
-                    if (MoreSettings.outputPath.value == OutputPath.usbDirect) {
+                    if (policy().usbExclusive) {
                         UacEngine.open(context)
                     } else {
                         null
                     }
                 },
                 // 同规格切歌复用现有流；通路被切走时才重建
-                engineStillValid = { MoreSettings.outputPath.value == OutputPath.usbDirect },
+                engineStillValid = { policy().usbExclusive },
                 onRouting = { path, notice, depth -> onSinkRouting?.invoke(path, notice, depth) },
                 // USB 走不成的原因：本类持有 Context，能真的去看设备列表与授权
                 usbUnavailable = {
@@ -223,13 +279,36 @@ class AnnieRenderersFactory(context: Context) : DefaultRenderersFactory(context)
                         else -> DowngradeReason.UsbOpenFailed
                     }
                 },
+                usbExclusiveIntent = { policy().usbExclusive },
                 // 这一次 configure 的全部意图：raw alt / 帧类型 / 传输标签，一个快照
                 request = request,
+                outputDeviceId = { outputDeviceIdProvider?.invoke() ?: 0 },
                 // 独占通路的音量：绕开 mixer 后 `setVolume` 没有接收方，只能由我方施加。
                 // 它自己处理"非独占 / DSD 直出 → 1f"，这里不做判断。
                 exclusiveGain = { ExclusiveVolume.linear },
                 // "上游还想不想播"：自愈与故障重建的唯一许可（见 `AaudioSink.playIntent`）
                 playIntent = { playIntent?.invoke() == true },
+                playIntentAt = { playIntentAt?.invoke() ?: 0L },
+                dapOpener = { format -> dapOpener?.invoke(format) },
+                sinkRequest = { format ->
+                    val plan = policy()
+                    val want = request()
+                    SinkRequest(
+                        route = routeProvider?.invoke() ?: AudioRoute.other,
+                        usbExclusive = plan.usbExclusive,
+                        rawFrames = want.rawFrames,
+                        dsdNativeAvailable = dapNativeReady?.invoke() == true,
+                        aaudioExclusiveAvailable = if (want.dopFrames) {
+                            want.aaudioDopExclusive
+                        } else {
+                            want.aaudioExclusive
+                        },
+                        dopFrames = want.dopFrames,
+                    )
+                },
+                // raw 帧没有消费者（内置 DAC 没开成）→ 由播放层记失败并按 PCM 重建。
+                // 不这样处理，1-bit 载荷会掉进系统 mixer，听感是满幅噪声。
+                rawUnroutable = { onDapOpenFailed?.invoke() },
             )
             return PcmAudioSink(
                 sink,
@@ -238,9 +317,25 @@ class AnnieRenderersFactory(context: Context) : DefaultRenderersFactory(context)
                 rawPassthrough = { request().rawFrames },
                 // 出口用**源**位深去挑端点格式，而不是调音后的 float 容器
                 onSourceBits = { sink.wireBitsHint = it },
-            )
+            ).also {
+                pendingAudioUs = { sink.pendingAudioUs }
+                releaseDapNow = { sink.releaseDap() }
+            }
         }
-        return PcmAudioSink(delegate, tuning, resampler)
+        // 系统通路同样必须让 raw DSD 帧**逐字节透传**。
+        //
+        // 以前这里没传 `rawPassthrough`（默认 `{ false }`），于是处理器链照常插一次
+        // 「176.4k → 目标率」的重采样 —— DSD 的 1-bit 字被当 PCM 重采样，格式也从
+        // 88 200/32bit 变成 352 800/24bit。后果有两层：内置 DAC 的容器形状对不上
+        // （直接被拒，走不到 native 开流），就算强行塞进去也只会是噪声。
+        //
+        // 能不能落地由 `decideDsdTransport` 负责；到了这里就只负责"字节别动"。
+        return PcmAudioSink(
+            delegate,
+            tuning,
+            resampler,
+            rawPassthrough = { rawFrames?.invoke() == true },
+        )
     }
 
     /**
@@ -282,5 +377,3 @@ class AnnieRenderersFactory(context: Context) : DefaultRenderersFactory(context)
         )
     }
 }
-
-/* AAudio 独占出口的总开关见 `AudioDirectProbe.kt` 的 `AAUDIO_SINK_ENABLED`（A/B 定责用）。 */

@@ -1,6 +1,7 @@
 package com.annieplayer.annie_music.kt.features.library
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -21,9 +22,20 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import com.annieplayer.annie_music.kt.core.compose.activityViewModel
+import com.annieplayer.annie_music.kt.core.state.MultiSelectOrigin
+import com.annieplayer.annie_music.kt.core.state.MultiSelectSheetState
+import com.annieplayer.annie_music.kt.core.state.UiViewModel
+import com.annieplayer.annie_music.kt.data.favorites.PlaylistScope
 import com.annieplayer.annie_music.kt.data.local.LocalLibraryStore
 import com.annieplayer.annie_music.kt.data.local.LocalTrackMeta
 import com.annieplayer.annie_music.kt.data.local.albumGroupKey
@@ -35,8 +47,12 @@ import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppRadius
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 import com.annieplayer.annie_music.kt.widgets.CoverPaletteBackdrop
+import com.annieplayer.annie_music.kt.widgets.MultiSelectHeaderActions
+import com.annieplayer.annie_music.kt.widgets.ResumePlayingPill
 import com.annieplayer.annie_music.kt.widgets.rememberCoverPalette
+import com.annieplayer.annie_music.kt.widgets.rememberPlayingRowVisible
 import com.annieplayer.annie_music.kt.widgets.shortScrollbar
+import kotlinx.coroutines.launch
 
 /**
  * 歌手详情的两个「全部」子页（歌曲 / 专辑）。
@@ -107,8 +123,34 @@ fun LocalArtistSongsScreen(
     LaunchedEffect(ordered) { ordered.take(80).forEach { onRequestCover(it.path) } }
     // 「歌手封面」：本地没有歌手头像资源，取该歌手首曲封面（与歌手详情主页面同一取法）
     val heroCover = remember(ordered) {
-        ordered.firstNotNullOfOrNull { t -> t.coverPath ?: LocalLibraryStore.existingCover(t.path) }
+        ordered.firstNotNullOfOrNull { t -> t.coverPath ?: LocalLibraryStore.existingCover(t) }
     }
+
+    val uiViewModel: UiViewModel = activityViewModel()
+    var selectMode by remember { mutableStateOf(false) }
+    val selectedIds = remember { mutableStateListOf<String>() }
+    fun toggleSelectMode() {
+        selectMode = !selectMode
+        selectedIds.clear()
+    }
+    fun toggleSelect(id: String) {
+        if (!selectedIds.remove(id)) selectedIds.add(id)
+    }
+    BackHandler(enabled = isTop && selectMode) { toggleSelectMode() }
+    val heroPalette = rememberCoverPalette(heroCover)
+    val pickedSongs = remember(selectedIds.toList(), ordered) {
+        ordered.filter { it.id in selectedIds }.map { it.toSong() }
+    }
+    val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val playingRowIndex = remember(ordered, currentSongId) {
+        if (currentSongId.isNullOrEmpty()) {
+            null
+        } else {
+            ordered.indexOfFirst { it.id == currentSongId }.takeIf { it >= 0 }
+        }
+    }
+    val playingRowVisible = rememberPlayingRowVisible(listState, playingRowIndex)
 
     // 出栈由 AppShell 的全局 PAGE 处理器统一做
 
@@ -124,6 +166,23 @@ fun LocalArtistSongsScreen(
                 title = "全部歌曲",
                 count = "${ordered.size} 首",
                 onClose = onClose,
+                trailing = {
+                    MultiSelectHeaderActions(
+                        count = pickedSongs.size,
+                        onClear = { selectedIds.clear() },
+                        onOpenActions = {
+                            if (pickedSongs.isNotEmpty()) {
+                                uiViewModel.openMultiSelectSheet(
+                                    MultiSelectSheetState(
+                                        songs = pickedSongs,
+                                        scope = PlaylistScope.local,
+                                        origin = MultiSelectOrigin.LocalPage,
+                                    ),
+                                )
+                            }
+                        },
+                    )
+                },
             )
             LocalSortRow(
                 hint = "共 ${ordered.size} 首 · $artistName",
@@ -136,7 +195,6 @@ fun LocalArtistSongsScreen(
                     LocalOrderToggle(pref.ascending) { pref.setAscending(!pref.ascending) }
                 },
             )
-            val listState = rememberLazyListState()
             LazyColumn(
                 state = listState,
                 modifier = Modifier.fillMaxSize().shortScrollbar(listState),
@@ -156,11 +214,39 @@ fun LocalArtistSongsScreen(
                         onMore = { onMore(t) },
                         // 与流媒体 `SingerDetailSongRow` 一致：副标题是「歌手 · 专辑」
                         showAlbum = true,
+                        selectionMode = selectMode,
+                        selected = selectedIds.contains(t.id),
+                        onToggleSelect = { toggleSelect(t.id) },
+                        onLongPress = if (selectedIds.contains(t.id)) {
+                            null
+                        } else {
+                            {
+                                if (!selectMode) selectMode = true
+                                toggleSelect(t.id)
+                            }
+                        },
                     )
                 }
                 item(key = "bottom-space") { Spacer(modifier = Modifier.height(AppSpacing.sp24)) }
             }
         }
+
+        val resumeIndex = playingRowIndex
+        ResumePlayingPill(
+            visible = resumeIndex != null && !playingRowVisible,
+            palette = heroPalette,
+            onClick = {
+                if (resumeIndex != null) {
+                    scope.launch { listState.animateScrollToItem(resumeIndex) }
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(
+                    end = AppSpacing.sp16,
+                    bottom = AppSpacing.bottomBarInset + AppSpacing.sp12,
+                ),
+        )
     }
 }
 
@@ -254,7 +340,7 @@ fun LocalArtistAlbumsScreen(
     val heroCover = remember(ordered) {
         ordered.firstNotNullOfOrNull { album ->
             album.tracks.firstNotNullOfOrNull { t ->
-                t.coverPath ?: LocalLibraryStore.existingCover(t.path)
+                t.coverPath ?: LocalLibraryStore.existingCover(t)
             }
         }
     }

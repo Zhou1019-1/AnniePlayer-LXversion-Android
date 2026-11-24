@@ -149,8 +149,17 @@ object AppSize {
     /** 歌手头像（Flutter: singer_search_results height: 56） */
     val singerAvatar = 56.dp
 
-    /** 详情页歌曲行高度（Flutter: album/singer/qobuz/kkbox `_rowHeight = 60`） */
-    val detailRowHeight = 60.dp
+    /**
+     * 详情页歌曲行高度。
+     *
+     * 曾经按 Flutter 的 `_rowHeight = 60` 定死；现在统一放大到 68 —— 歌手单曲 / 本地歌手单曲 /
+     * 专辑详情 / 歌单详情 / 本地专辑详情 / 自建歌单详情六处共用这一个值，`SongRowPager`
+     * 的整页高度也是它乘行数，所以改这里所有页面一起变。
+     */
+    val detailRowHeight = 68.dp
+
+    /** 歌曲行内封面边长：详情页 / 主页货架 / 歌单详情统一 44dp（原先各处 40 与 44 并存） */
+    val songRowCover = 44.dp
 
     /** 迷你播放器高度（Flutter: mini_player height: 62） */
     val miniPlayerHeight = 62.dp

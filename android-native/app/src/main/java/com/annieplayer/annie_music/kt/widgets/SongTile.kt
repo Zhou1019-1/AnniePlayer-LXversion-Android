@@ -16,7 +16,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.ripple
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -64,8 +63,9 @@ private val MetaLineHeight = 13.sp
  * 交互：
  * - 点击 → 多选模式下切换选中，否则播放。
  * - 长按 → 进入多选并选中该行（未选中时）。
- * - 右侧 ⋮：点开全局单曲操作菜单（下载 / 跳转歌手…）；下载中显示旋转环。
- *   **多选态整块换成 [SelectCheckBox]**（勾在框里、无底色），⋮ 不渲染。
+ * - 行尾 `♥ · ⋮`（[SongRowActions]）：爱心收藏 / 取消收藏；⋮ 打开全局单曲操作菜单
+ *   （下载 / 跳转歌手…），下载中换旋转环。**多选态整组换成 [SelectCheckBox]**。
+ *   收藏状态由宿主经 [LocalSongLike] 注入（行自己不碰收藏层）。
  *
  * 视觉（**单栏**）：
  * - 封面 [AppSize.searchTileCover] = 44dp / 圆角 8；三行文本 **17sp / 13sp / 11sp**
@@ -137,27 +137,18 @@ fun SongTile(
             },
         )
 
-        // ── 行尾槽位：多选态 = 勾选框；常态 = ⋮（下载中显示旋转环） ──
+        // ── 行尾槽位：多选态 = 勾选框；常态 = ♥ · ⋮（收藏状态与开关由宿主经 [LocalSongLike] 注入） ──
         val toggle = onToggleSelect
         if (selectionMode && toggle != null) {
             Box(modifier = Modifier.padding(horizontal = AppSpacing.sp10)) {
                 SelectCheckBox(checked = selected, onToggle = { toggle(song) })
             }
         } else {
-            Box(
-                modifier = Modifier
-                    // 命中区与勾选框同位同宽（48dp）：切多选时文字区不横向跳一格
-                    .minimumInteractiveComponentSize()
-                    .clickableRipple { onDownload(song) }
-                    .padding(AppSpacing.sp10),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (isDownloading) {
-                    DownloadRing()
-                } else {
-                    SongMoreGlyph()
-                }
-            }
+            SongRowActions(
+                song = song,
+                onMore = { onDownload(song) },
+                downloading = isDownloading,
+            )
         }
     }
 }
@@ -254,9 +245,11 @@ private fun SongTileCard(
 /**
  * 第三行 meta：`时长 · 音质标 · 源名`（如 `3:34 · FLAC · 酷我`）。
  *
- * 颜色与第二行（`歌手 · 专辑`）**完全一致**（`textTertiary`）：这两行是同一块副文本，
- * 之前给音质标单独上靛蓝、分隔符用 `primaryA60`，整行读起来像三个不同层级的信息。
- * 音质仍保留 `SemiBold` —— 权重区分够了，不需要再换色。
+ * 三行式行（搜索结果 / 收藏库歌曲 / 在线歌单）保留音质标：这一行本来就是给规格用的，
+ * 去掉之后三行只剩「时长 · 源名」，第三行等于作废。两行式行（歌手详情 / 专辑详情 / 主页货架）
+ * 仍然不标，那些行没有位置放它。
+ *
+ * 颜色与第二行（`歌手 · 专辑`）一致（`textTertiary`），音质标只用 `SemiBold` 区分权重。
  */
 @Composable
 private fun SongTileMetaLine(song: Song, sourceLabel: String?) {
@@ -301,25 +294,12 @@ private fun SongTileMetaLine(song: Song, sourceLabel: String?) {
 }
 
 /**
- * `秒 -> m:ss`（对齐 Flutter `_formatDuration`）。
- *
- * **超过 100000 秒（27 小时）当毫秒处理**：历史数据里真的混进过毫秒 ——
- * 酷狗聚合接口的 `timelength_320` 是毫秒，早先几个版本直接当秒写进了 `Song.duration`，
- * 于是 `4:03` 的歌渲染成 `4052:53`。映射层已经修了，但**已收藏的 `Song` 是快照**，
- * 不会自己变；这里兜一次，老收藏就当场恢复正常，不用重新收藏。
- */
-private fun formatDuration(seconds: Int): String {
-    val total = if (seconds > 100_000) seconds / 1000 else seconds
-    return "${total / 60}:${(total % 60).toString().padStart(2, '0')}"
-}
-
-/**
  * 音质短标签（可多个）。
  *
  * Apple：按档位逐个列出（同一条目可能同时具备多档），顺序固定为
  * `Hi-Res → Dolby → ALAC → AAC 256`；一个都没有才不标。
  *
- * 其它平台仍然只显示「最高那一档」。
+ * 其它平台只显示「最高那一档」。
  */
 private fun qualityLabels(song: Song): List<String> =
     if (song.platform == MusicPlatform.apple) {
@@ -333,7 +313,7 @@ private fun qualityLabels(song: Song): List<String> =
         listOfNotNull(topQualityLabel(song.qualities))
     }
 
-/** 取最高音质短标签（HiRes / ALAC / 320K / 128K）—— 对齐 Flutter `_topQualityLabel` */
+/** 取最高音质短标签（HiRes / ALAC / 320K / 128K） */
 private fun topQualityLabel(qualities: List<Quality>): String? {
     if (qualities.isEmpty()) return null
     // Atmos → ALAC 超高解析 → ALAC 无损 → AAC 256 → …：与音质选择弹窗同一套次序
@@ -359,6 +339,19 @@ private fun topQualityLabel(qualities: List<Quality>): String? {
         }
     }
     return null
+}
+
+/**
+ * `秒 -> m:ss`（对齐 Flutter `_formatDuration`）。
+ *
+ * **超过 100000 秒（27 小时）当毫秒处理**：历史数据里真的混进过毫秒 ——
+ * 酷狗聚合接口的 `timelength_320` 是毫秒，早先几个版本直接当秒写进了 `Song.duration`，
+ * 于是 `4:03` 的歌渲染成 `4052:53`。映射层已经修了，但**已收藏的 `Song` 是快照**，
+ * 不会自己变；这里兜一次，老收藏就当场恢复正常，不用重新收藏。
+ */
+private fun formatDuration(seconds: Int): String {
+    val total = if (seconds > 100_000) seconds / 1000 else seconds
+    return "${total / 60}:${(total % 60).toString().padStart(2, '0')}"
 }
 
 /**

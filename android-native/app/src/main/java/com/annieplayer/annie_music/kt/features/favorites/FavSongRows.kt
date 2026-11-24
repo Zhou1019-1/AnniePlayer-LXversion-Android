@@ -2,6 +2,7 @@ package com.annieplayer.annie_music.kt.features.favorites
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -19,6 +20,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -34,8 +36,15 @@ import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppFontSize
 import com.annieplayer.annie_music.kt.ui.theme.AppFontWeight
 import com.annieplayer.annie_music.kt.ui.theme.AppIconSize
+import com.annieplayer.annie_music.kt.ui.theme.LocalCoverThemePalette
+import com.annieplayer.annie_music.kt.widgets.ResumePlayingPill
+import com.annieplayer.annie_music.kt.widgets.rememberPlayingRowVisible
+import kotlinx.coroutines.launch
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 import com.annieplayer.annie_music.kt.widgets.PlayIcon
+import androidx.compose.runtime.CompositionLocalProvider
+import com.annieplayer.annie_music.kt.widgets.LocalSongLike
+import com.annieplayer.annie_music.kt.widgets.SongLikeStyle
 import com.annieplayer.annie_music.kt.widgets.SongTile
 import com.annieplayer.annie_music.kt.widgets.clickableRipple
 import com.annieplayer.annie_music.kt.widgets.shortScrollbar
@@ -102,6 +111,9 @@ internal fun rememberLiveSongs(songs: List<Song>): List<Song> {
  *
  * [songs] 同时是**播放队列**：点第 index 首就从那一首开始播，所以调用方传进来的
  * 必须是「屏幕上看到的这份」（搜索过滤后 / 歌单内），不能传全量。
+ *
+ * [likeStyle]：「我喜欢」页传 [SongLikeStyle.RemoveOnly]（行尾是空心斜杠爱心，点 = 取消收藏，
+ * 该行随即消失）；其它页面用默认的 Normal。
  */
 @Composable
 internal fun FavSongList(
@@ -110,10 +122,15 @@ internal fun FavSongList(
     onPlayAt: (Int) -> Unit,
     onMore: (Song) -> Unit,
     modifier: Modifier = Modifier,
+    likeStyle: SongLikeStyle = SongLikeStyle.Normal,
 ) {
     val metaByPath = rememberLocalMetaByPath()
     val listState = rememberLazyListState()
-
+    // 行尾爱心的样式走局部覆盖：行组件本身不判断「这是哪一页」
+    val likeBridge = LocalSongLike.current
+    CompositionLocalProvider(
+        LocalSongLike provides likeBridge.copy(style = likeStyle),
+    ) {
     LazyColumn(
         state = listState,
         modifier = modifier.fillMaxSize().shortScrollbar(listState),
@@ -140,6 +157,8 @@ internal fun FavSongList(
                     playingTint = AppColors.playingGray,
                     onClick = { onPlayAt(index) },
                     onMore = { onMore(localMeta.toSong()) },
+                    // 取消收藏后整行收拢：不加这个会「硬消失」，上下两行瞬间贴上
+                    modifier = Modifier.animateItem(),
                 )
             } else {
                 SongTile(
@@ -153,8 +172,34 @@ internal fun FavSongList(
                     isActive = currentSong != null &&
                         currentSong.id == song.id &&
                         currentSong.platform == song.platform,
+                    modifier = Modifier.animateItem(),
                 )
             }
+        }
+    }
+
+        val resumeIndex = remember(songs, currentSong?.id) {
+            val cur = currentSong?.id
+            if (cur.isNullOrEmpty()) null else songs.indexOfFirst { it.id == cur }.takeIf { it >= 0 }
+        }
+        val resumeVisible = rememberPlayingRowVisible(listState, resumeIndex)
+        val resumeScope = rememberCoroutineScope()
+        Box(modifier = Modifier.fillMaxSize()) {
+            ResumePlayingPill(
+                visible = resumeIndex != null && !resumeVisible,
+                palette = LocalCoverThemePalette.current,
+                onClick = {
+                    if (resumeIndex != null) {
+                        resumeScope.launch { listState.animateScrollToItem(resumeIndex) }
+                    }
+                },
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(
+                        end = AppSpacing.sp16,
+                        bottom = AppSpacing.bottomBarInset + AppSpacing.sp12,
+                    ),
+            )
         }
     }
 }

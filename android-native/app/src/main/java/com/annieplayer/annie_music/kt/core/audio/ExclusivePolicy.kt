@@ -23,6 +23,8 @@ enum class ExclusiveDenial(val label: String) {
     /** 探测矩阵已经测出"这个率 + 这个格式拿不到独占"，不必再试 */
     ProbedShared("探测显示拿不到独占"),
 
+    FormatNotDeclared("端点不支持该 PCM 编码"),
+
     /** `open` 直接返回 0 */
     OpenFailed("开流失败"),
 

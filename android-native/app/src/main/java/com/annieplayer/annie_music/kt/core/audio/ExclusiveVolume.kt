@@ -64,7 +64,6 @@ object ExclusiveVolume {
     }
 
     data class State(
-        /** 当前音量的归属通路（`OutputPath.key`）；空 = 还没上报 */
         val routeKey: String = "",
         /** 现在是否有独占流可调（USB 独占 / AAudio 独占且已生效） */
         val available: Boolean = false,

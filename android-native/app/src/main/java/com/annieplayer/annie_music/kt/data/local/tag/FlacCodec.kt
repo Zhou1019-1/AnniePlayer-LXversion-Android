@@ -74,17 +74,15 @@ internal object FlacCodec : TagCodec {
     override fun write(file: File, bag: TagBag, policy: WritePolicy): WriteResult {
         val parsed = readBlocks(file) ?: return WriteResult.fail(format, "不是 FLAC 文件")
         val existing = runCatching { read(file) }.getOrNull()
-        val merged = TagBag(
-            text = (existing?.text.orEmpty() + bag.text).filterValues { it.isNotEmpty() },
-            cover = bag.cover ?: existing?.cover,
-            extra = (existing?.extra.orEmpty() + bag.extra).filterValues { it.isNotEmpty() },
-        )
+        val merged = bag.mergedWith(existing)
 
         val kept = ArrayList<Block>()
         for (block in parsed.blocks) {
             when (block.type) {
                 TYPE_VORBIS_COMMENT, TYPE_PADDING -> Unit
-                TYPE_PICTURE -> if (merged.cover == null) kept.add(block)
+                // 旧 PICTURE 块只在「合并后仍没有封面」时原样留下；
+                // removeCover 时 merged.cover 同样是 null，光看它会把旧图留下来（删不掉）
+                TYPE_PICTURE -> if (!bag.removeCover && merged.cover == null) kept.add(block)
                 else -> kept.add(block)
             }
         }

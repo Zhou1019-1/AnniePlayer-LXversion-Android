@@ -68,80 +68,8 @@ import com.annieplayer.annie_music.kt.widgets.glassPanel
 /** 「下载中」轻提示的底部偏移（对齐 Dart `Positioned(bottom: 160)`） */
 private val HomeDownloadToastBottom = 160.dp
 
-/** 待下载条计数圆点直径（对齐 Dart `Container(width: 22, height: 22)`） */
-private val HomePendingBadgeSize = 22.dp
-
 /** KKBOX / QOBUZ 模式按钮的上下内边距（对齐 Dart `EdgeInsets.symmetric(vertical: 9)`） */
 private val HomeForeignTabPadV = 9.dp
-
-/**
- * 待下载条（对齐 Dart `_PendingDownloadBar`）：
- * 计数圆点 + 「待下载歌曲」→ 查看浮层；「清空」；「下载全部」（下载中置灰）。
- */
-@Composable
-internal fun HomePendingDownloadBar(
-    count: Int,
-    batchDownloading: Boolean,
-    onView: () -> Unit,
-    onClear: () -> Unit,
-    onBatch: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(start = AppSpacing.sp16, end = AppSpacing.sp16, bottom = AppSpacing.sp8)
-            .background(AppColors.primaryA08, RoundedCornerShape(AppRadius.panel))
-            .padding(horizontal = AppSpacing.sp14, vertical = AppSpacing.sp10),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        // 左侧：计数 + 文案（点整块查看多选浮层）
-        Row(
-            modifier = Modifier.weight(1f).clickableRipple(onView),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(HomePendingBadgeSize)
-                    .background(AppColors.primary, CircleShape),
-                contentAlignment = Alignment.Center,
-            ) {
-                Text(
-                    text = "$count",
-                    color = AppColors.white,
-                    fontSize = AppFontSize.xs,
-                    fontWeight = AppFontWeight.bold,
-                )
-            }
-            Spacer(modifier = Modifier.width(AppSpacing.sp6))
-            Text(
-                text = "待下载歌曲",
-                color = AppColors.white70,
-                fontSize = AppFontSize.size13,
-                fontWeight = AppFontWeight.medium,
-            )
-        }
-        // 清空
-        Box(modifier = Modifier.clickableRipple(onClear).padding(AppSpacing.sp4)) {
-            Text(text = "清空", color = AppColors.white38, fontSize = AppFontSize.sm)
-        }
-        // 下载全部（Dart: onTap 在下载中为 null → 这里在 lambda 内门控）
-        Box(
-            modifier = Modifier
-                .clickableRipple { onBatch() }
-                .background(AppColors.primary, RoundedCornerShape(AppRadius.r10))
-                .padding(horizontal = AppSpacing.sp16, vertical = AppSpacing.sp8),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(
-                text = if (batchDownloading) "下载中..." else "下载全部",
-                color = AppColors.white,
-                fontSize = AppFontSize.sm,
-                fontWeight = AppFontWeight.semiBold,
-            )
-        }
-    }
-}
 
 /**
  * ⇄ 切换搜索源按钮（原「圆形主色 FAB」，现对齐详情页「下载 N 首」的玻璃 pill）。

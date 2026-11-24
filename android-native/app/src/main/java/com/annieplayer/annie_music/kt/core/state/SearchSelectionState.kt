@@ -13,18 +13,15 @@ import kotlinx.coroutines.flow.asStateFlow
  * RN 版有两个几乎相同的 store，Flutter 版合并为一个通用 selection 状态，Kotlin 沿用该合并设计。
  */
 
-/** 多选状态（对齐 Dart `SelectionState`） */
+/** 多选状态（对齐 Dart `SelectionState`；「待下载」列表面板已随多选操作抽屉一起移除） */
 data class SelectionState(
     val selectedSongs: List<Song> = emptyList(),
-    val overlayVisible: Boolean = false,
 ) {
     /** 局部更新（对齐 Dart `SelectionState.copyWith`；`null` 不覆盖旧值） */
     fun copyWith(
         selectedSongs: List<Song>? = null,
-        overlayVisible: Boolean? = null,
     ): SelectionState = SelectionState(
         selectedSongs = selectedSongs ?: this.selectedSongs,
-        overlayVisible = overlayVisible ?: this.overlayVisible,
     )
 }
 
@@ -57,9 +54,5 @@ class SearchSelectionViewModel : ViewModel() {
 
     fun clearAll() {
         _state.value = _state.value.copyWith(selectedSongs = emptyList())
-    }
-
-    fun setOverlayVisible(visible: Boolean) {
-        _state.value = _state.value.copyWith(overlayVisible = visible)
     }
 }

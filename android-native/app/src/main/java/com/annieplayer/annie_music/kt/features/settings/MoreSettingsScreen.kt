@@ -70,7 +70,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
-import com.annieplayer.annie_music.kt.core.audio.OutputPath
+import com.annieplayer.annie_music.kt.core.audio.SinkKind
 import com.annieplayer.annie_music.kt.core.audio.OutputToggles
 import com.annieplayer.annie_music.kt.core.audio.TuningEngine
 import com.annieplayer.annie_music.kt.data.model.MusicPlatform
@@ -282,9 +282,10 @@ fun moreSettingsGroups(
     onToggleWriteEnhancedLyrics: (Boolean) -> Unit,
     saveLrcFile: Boolean,
     onToggleSaveLrcFile: (Boolean) -> Unit,
-    /** 输出通路（系统 / AAudio 独占 / USB 独占 · 未实现）。**用户唯一要选的"大项"** */
-    outputPath: OutputPath = OutputPath.systemMix,
-    onPickOutputPath: (OutputPath) -> Unit = {},
+    usbExclusive: Boolean = false,
+    onToggleUsbExclusive: (Boolean) -> Unit = {},
+    aaudioExclusive: Boolean = false,
+    onToggleAaudioExclusive: (Boolean) -> Unit = {},
     /** 该通路的开关（按源采样率 / Bit Perfect）。开关是**意愿**，不随设备自动关 */
     outputToggles: OutputToggles = OutputToggles(),
     onPickOutputToggles: (OutputToggles) -> Unit = {},
@@ -301,7 +302,7 @@ fun moreSettingsGroups(
      * 设置页只拿它改写通路项的副标题；一次性告知交给宿主弹窗，这里不放常驻提示行 ——
      * 常驻行会和设置项抢位置，而且永远是滞后的。
      */
-    effectivePath: OutputPath? = null,
+    effectivePath: SinkKind? = null,
     /** 降级原因（一句话）；仅在生效 ≠ 意图时有值 */
     downgradeLabel: String? = null,
     tuningEngine: TuningEngine = TuningEngine.graphic,
@@ -334,9 +335,6 @@ fun moreSettingsGroups(
     /** 打开「日志诊断」：运行时状态 / 最近失败 / 建轨写入计数，专供排查问题 */
     onShowDiagnostics: () -> Unit = {},
     outputDetail: String = "",
-    /** 已导入的插件数量（0 时提示「暂无已导入插件」） */
-    lxPluginCount: Int = 0,
-    onManageLxPlugins: () -> Unit = {},
 ): List<MoreSettingGroup> = listOf(
     MoreSettingGroup(
         title = "播放相关",
@@ -413,59 +411,40 @@ fun moreSettingsGroups(
             // 现在只选"从哪出去"，开关是这条通路的属性，
             // "能不能调音"由宿主用 `tuningEnabled(path, toggles)` 派生出来。
             add(
-                MoreSettingDropdown(
-                    key = "audio-output-path",
-                    label = "输出通路",
-                    // 副标题说**这条路怎么走**（静态），不是"现在落在哪一级"（动态）。
-                    // 动态结果在下面的「链路实况」里 —— 两者放错位置会互相打架：
-                    // 以前这里复用了降级链文案，头一句还是"非 USB 独占"，
-                    // 而通路明明已经三选一了。
-                    subtitle = when (outputPath) {
-                        OutputPath.systemMix ->
-                            "经系统 mixer 输出 · 由开关决定是否按源率送出"
-                        OutputPath.aaudioExclusive ->
-                            "绕开系统 mixer · 不能独占时回落系统通路"
-                        OutputPath.usbDirect ->
-                            "直接写 USB 端点 · 绕开 AudioFlinger（需 Android 14+，独占期间设备对系统不可见）"
-                    }.let { base ->
-                        // 生效 ≠ 意图：把"现在实际走哪条"直接写在副标题上，
-                        // 常驻提示行由此消失（一次性的告知在宿主的降级弹窗里）。
-                        // 蓝牙优先说，因为那时选哪条都一样落回系统通路。
-                        when {
-                            isBluetoothOutput ->
-                                "蓝牙链路由编解码器决定 · 现在一律走系统通路"
-                            effectivePath != null && effectivePath != outputPath ->
-                                "实际：${effectivePath.label}" +
-                                    (downgradeLabel?.let { " · $it" } ?: "")
-                            else -> base
-                        }
+                MoreSettingSwitch(
+                    key = "audio-usb-exclusive",
+                    label = "USB 独占",
+                    subtitle = when {
+                        isBluetoothOutput ->
+                            "蓝牙链路由编解码器决定 · 现在一律走系统通路"
+                        usbExclusive ->
+                            "直接写 USB 端点 · 绕开 AudioFlinger（需 Android 14+）；开不出来会提示原因"
+                        aaudioExclusive ->
+                            "普通 PCM 先试 AAudio 独占、不行再走 AudioTrack；DSD 单独走私有格式"
+                        else ->
+                            "普通 PCM 直接走 AudioTrack（系统混音）；DSD 单独走私有格式"
                     },
-                    value = outputPath.label,
-                    options = buildList {
-                        for (path in OutputPath.available) {
-                            add(
-                                MoreSettingOption(
-                                    label = path.label,
-                                    selected = path == outputPath,
-                                    onSelect = { onPickOutputPath(path) },
-                                ),
-                            )
-                        }
-                        for (planned in OutputPath.planned) {
-                            add(
-                                MoreSettingOption(
-                                    label = planned.label + "（未实现）",
-                                    selected = false,
-                                    enabled = false,
-                                    onSelect = {},
-                                ),
-                            )
-                        }
-                    },
-                    // 「输出通路」的说明按钮已删除：那段文案讲的是「非 USB 独占」三级降级链，
-                    // 而 bitPerfectMixer 通路整个枚举值都已移除，内容过时。
+                    checked = usbExclusive,
+                    onCheckedChange = { onToggleUsbExclusive(it) },
                 ),
             )
+            add(
+                MoreSettingSwitch(
+                    key = "audio-aaudio-exclusive",
+                    label = "AAudio 独占",
+                    subtitle = when {
+                        isBluetoothOutput ->
+                            "蓝牙没有 mmap 端点 · 现在一律走系统通路"
+                        aaudioExclusive ->
+                            "按源率直接开硬件流 · 开不出来自动回落 AudioTrack"
+                        else ->
+                            "关闭 · 不做独占探测，普通 PCM 走 AudioTrack"
+                    },
+                    checked = aaudioExclusive,
+                    onCheckedChange = { onToggleAaudioExclusive(it) },
+                ),
+            )
+            // 蓝牙链路摘要：codec 协商出来的参数。以前它冒充「输出方式」（整组被藏起来
             // 蓝牙链路摘要：codec 协商出来的参数。以前它冒充「输出方式」（整组被藏起来
             // 只好拿一行事实顶上），现在通路可选了，它就只是**链路本身的说明**。
             if (isBluetoothOutput) {
@@ -484,8 +463,8 @@ fun moreSettingsGroups(
             //
             // 蓝牙下按**系统通路**选：那时 a2dp 线程接管一切，`bitPerfect` 没有意义，
             // 而「强制按源采样率」有效，必须露出来。
-            when (if (isBluetoothOutput) OutputPath.systemMix else outputPath) {
-                OutputPath.systemMix -> {
+            when (isBluetoothOutput || !usbExclusive) {
+                true -> {
                     // 蓝牙下这一项**也要显示、也要真的生效**。
                     //
                     // 以前蓝牙时整块不渲染，理由是"a2dp 线程的率由 codec 决定，按源率等于把
@@ -509,21 +488,7 @@ fun moreSettingsGroups(
                     )
                 }
 
-                OutputPath.aaudioExclusive -> {
-                    add(
-                        MoreSettingSwitch(
-                            key = "audio-toggle-bit-perfect",
-                            label = "Bit Perfect",
-                            subtitle = "不调音、不改率；关闭后允许调音，但仍走独占流",
-                            checked = outputToggles.bitPerfect,
-                            onCheckedChange = {
-                                onPickOutputToggles(outputToggles.copy(bitPerfect = it))
-                            },
-                        ),
-                    )
-                }
-
-                OutputPath.usbDirect -> {
+                else -> {
                     add(
                         MoreSettingSwitch(
                             key = "audio-toggle-bit-perfect",
@@ -598,23 +563,6 @@ fun moreSettingsGroups(
                 // 两个旋钮管同一件事只会自相矛盾，这也是原来那个下拉存在的唯一理由消失的原因。
             }
         },
-    ),
-    MoreSettingGroup(
-        title = "插件设置",
-        items = listOf(
-            // 「应用插件」开关已删除：国内四平台的播放/下载都只有插件这一条路
-            //（内置直链接口已移除，没有任何降级/回退），没有"要不要用插件"可选项了。
-            MoreSettingAction(
-                key = "lx-plugin-manage",
-                label = "插件管理",
-                subtitle = if (lxPluginCount == 0) {
-                    "暂无已导入插件 · 国内四平台的下载需要在插件解析"
-                } else {
-                    "已导入 $lxPluginCount 个插件"
-                },
-                onClick = onManageLxPlugins,
-            ),
-        ),
     ),
     MoreSettingGroup(
         title = "下载相关",

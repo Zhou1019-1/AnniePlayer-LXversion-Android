@@ -174,9 +174,12 @@ object AssetCache {
     /** 播放缓存目录（Media3 流式缓存 `SimpleCache`） */
     private fun _playbackDir(): File = File(_baseDir(), PLAYBACK_CACHE_DIR_NAME)
 
-    /** 封面/图片缓存目录：本层 `assets`（封面/试听）+ Coil 的 `image_cache` */
+    /** 封面/图片缓存目录：本层 `assets`（封面/试听）+ Coil 的 `image_cache` + 歌单动态封面 */
     private fun _coverDirs(): List<File> =
-        listOf(File(_baseDir(), "assets"), File(_baseDir(), CoilCacheDirName))
+        listOf(File(_baseDir(), "assets"), File(_baseDir(), CoilCacheDirName), _motionCoverDir())
+
+    /** 歌单动态封面缓存目录（Media3 `SimpleCache`，见 [MotionCoverCache]） */
+    private fun _motionCoverDir(): File = File(_baseDir(), MotionCoverCache.DirName)
 
     /**
      * 清 Coil 的磁盘缓存 —— **必须走它的 API，不能删目录**。
@@ -260,6 +263,13 @@ object AssetCache {
                 // 之后封面一直加载不出来，只有重启进程才恢复）
                 val coilBytes = _totalDirSize(File(_baseDir(), CoilCacheDirName))
                 if (clearCoilDiskCache()) freed += coilBytes
+                val motion = _motionCoverDir()
+                freed += _totalDirSize(motion)
+                MotionCoverCache.release()
+                try {
+                    if (motion.exists()) motion.deleteRecursively()
+                } catch (_: Throwable) {
+                }
                 _memory.clear()
             }
             if (CacheCategory.DOWNLOADS in categories) {
@@ -281,6 +291,8 @@ object AssetCache {
     suspend fun clearAllCache() {
         // Coil 那份先走 API 清；下面整目录删除时跳过它（理由同 clearCoilDiskCache）
         clearCoilDiskCache()
+        // 动态封面的 SimpleCache 必须先关：它握着索引库与文件句柄，直接删目录会让索引与文件不一致
+        MotionCoverCache.release()
         val base = _baseDir()
         // 私有下载目录显式先删（语义明确；即使不在 temp 根目录下也能覆盖）
         val downloads = File(base, "downloads")

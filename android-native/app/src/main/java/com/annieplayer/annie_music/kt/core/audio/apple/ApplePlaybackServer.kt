@@ -86,6 +86,14 @@ object ApplePlaybackServer {
      */
     fun cacheKeyFor(uri: String): String? = current?.cacheKeyFor(uri)
 
+    /**
+     * 当前会话全部分片的「本机地址 → 稳定缓存 key」，供整曲预热遍历；会话没起来时为空。
+     *
+     * key 在**调用这一刻**就固定下来。预热是后台长任务，期间切歌会换掉 [current]，
+     * 那时再走 [cacheKeyFor] 就映射不到旧地址了，会退化成「拿完整 URL 当 key」往缓存里写垃圾。
+     */
+    fun segmentTargets(): List<Pair<String, String>> = current?.segmentTargets().orEmpty()
+
     // ── 「下一首」预热 ──
     // 非缓存切歌的等待全在 start() 那四步（masterUrl → master → media → init+key）
     // 加上 Media3 首次拉 seg/0（一片 1~3MB + 解密）。这里提前替下一首做完，
@@ -220,6 +228,14 @@ object ApplePlaybackServer {
                 path.startsWith("/seg/") -> "$prefix:seg:" + path.removePrefix("/seg/")
                 else -> null
             }
+        }
+
+        /** 全部分片的（本机地址, 缓存 key）；会话已关或还没起来时为空 */
+        fun segmentTargets(): List<Pair<String, String>> {
+            if (!running) return emptyList()
+            val prefix = cachePrefix ?: return emptyList()
+            val base = cacheKeyBase ?: return emptyList()
+            return media.segments.indices.map { i -> "$base/seg/$i" to "$prefix:seg:$i" }
         }
 
         /**

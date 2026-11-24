@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
@@ -24,13 +25,14 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateListOf
@@ -42,17 +44,25 @@ import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import androidx.compose.ui.res.painterResource
+import com.annieplayer.annie_music.kt.R
 import com.annieplayer.annie_music.kt.core.audio.apple.ApplePrefetch
 import com.annieplayer.annie_music.kt.core.compose.activityViewModel
 import com.annieplayer.annie_music.kt.data.favorites.FavoriteKeys
@@ -69,11 +79,16 @@ import com.annieplayer.annie_music.kt.data.resolveArtist
 import com.annieplayer.annie_music.kt.core.util.downloadQualityFor
 import com.annieplayer.annie_music.kt.core.util.enqueueDownload
 import com.annieplayer.annie_music.kt.data.resolveDownloadLyric
+import com.annieplayer.annie_music.kt.data.sources.apple.findAppleMotionCover
 import com.annieplayer.annie_music.kt.features.downloads.DownloadMeta
 import com.annieplayer.annie_music.kt.features.downloads.batchDownloadQualities
 import com.annieplayer.annie_music.kt.features.downloads.downloadOneAndRegister
 import com.annieplayer.annie_music.kt.core.state.PlayerViewModel
+import com.annieplayer.annie_music.kt.core.state.MultiSelectOrigin
+import com.annieplayer.annie_music.kt.core.state.MultiSelectSheetState
+import com.annieplayer.annie_music.kt.core.state.PlaylistPickerRequest
 import com.annieplayer.annie_music.kt.core.state.UiViewModel
+import com.annieplayer.annie_music.kt.data.favorites.PlaylistScope
 import com.annieplayer.annie_music.kt.core.state.toOverlayFlags
 import com.annieplayer.annie_music.kt.data.fetchAlbumSongsByPlatform
 import com.annieplayer.annie_music.kt.data.fetchDownloadUrlBySong
@@ -193,6 +208,10 @@ private class AlbumDetailState {
     var songs by mutableStateOf<List<AlbumSong>>(emptyList())
     var qualitySpec by mutableStateOf("")
     var releaseDate by mutableStateOf("")
+    var tallCover by mutableStateOf("")
+    var motionCover by mutableStateOf("")
+    var lookupAlbum by mutableStateOf("")
+    var lookupArtist by mutableStateOf("")
 
     var selectMode by mutableStateOf(false)
     val selectedIds = mutableStateListOf<String>()
@@ -232,7 +251,9 @@ private fun AlbumDetailContent(
     }
 
     /** 封面动态色板（与播放页同一取色链路；同 url 进程级缓存见 core/util/ColorExtractor.kt） */
-    val palette = rememberCoverPalette(data.cover)
+    val heroImageUrl = st.tallCover.ifEmpty { data.cover }
+    val palette = rememberCoverPalette(heroImageUrl)
+    PageTintEffect(uiViewModel, palette, coverUrl = heroImageUrl)
 
     // 进入浮层把全局色板临时切为该专辑色板，退出恢复进入前的色板（与整页版同一套取色链路）
     // 不再写入全局色板（原 SnapshotPaletteAndRestore）：详情页只用本地 palette 渲染，
@@ -273,6 +294,10 @@ private fun AlbumDetailContent(
         st.batchProgress = ""
         st.pickerVisible = false
         st.releaseDate = ""
+        st.tallCover = ""
+        st.motionCover = ""
+        st.lookupAlbum = ""
+        st.lookupArtist = ""
     }
 
     suspend fun play(target: AlbumSong) {
@@ -362,6 +387,10 @@ private fun AlbumDetailContent(
                 compareBy({ it.discNumber ?: 1 }, { it.track ?: Int.MAX_VALUE }),
             )
             st.releaseDate = result.pub
+            if (result.tallCover.isNotEmpty()) st.tallCover = result.tallCover
+            if (result.motionCover.isNotEmpty()) st.motionCover = result.motionCover
+            st.lookupAlbum = result.lookupAlbum
+            st.lookupArtist = result.lookupArtist
             // 校准收藏记录：这张专辑如果已经收藏，把列表里显示的名字 / 歌手 / 封面 /
             // 曲目数 / 发行日期对齐到当前事实。
             // 只有在**打开了这张专辑**时才会走到这里 —— 收藏库的列表页从不发请求。
@@ -383,6 +412,21 @@ private fun AlbumDetailContent(
             st.error = msg.ifEmpty { "加载失败" }
         } finally {
             st.loading = false
+        }
+    }
+
+    LaunchedEffect(data.id, data.platform, st.loading, st.lookupAlbum, st.lookupArtist) {
+        if (data.platform == MusicPlatform.apple) return@LaunchedEffect
+        if (st.loading) return@LaunchedEffect
+        if (st.motionCover.isNotEmpty()) return@LaunchedEffect
+        val albumName = st.lookupAlbum.ifEmpty { data.name }
+        val artistName = st.lookupArtist.ifEmpty { data.artist }
+        val found = runCatching {
+            findAppleMotionCover(artistName, albumName)
+        }.getOrNull() ?: return@LaunchedEffect
+        if (st.motionCover.isEmpty()) {
+            st.tallCover = found.tallCover
+            st.motionCover = found.motionCover
         }
     }
 
@@ -432,54 +476,106 @@ private fun AlbumDetailContent(
         ) {
             // 封面取色氛围背景（含纯色底兜底；API < 31 时 blur 自动降级为原图，不崩）
             CoverPaletteBackdrop(
-                coverUrl = data.cover,
+                coverUrl = heroImageUrl,
                 palette = palette,
                 modifier = Modifier.fillMaxSize(),
             )
-            Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
-                AlbumDetailHeader(
-                    selectMode = st.selectMode,
-                    selectedAll = st.selectedIds.size == st.songs.size,
-                    onClose = { requestClose() },
-                    onToggleSelectAll = { toggleSelectAll() },
-                    onToggleSelectMode = { toggleSelectMode() },
-                )
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    AlbumDetailBody(
-                        st = st,
-                        data = data,
-                        tasks = tasks,
-                        palette = palette,
-                        currentSongId = playerState.currentSong?.id,
-                        onPlay = { scope.launch { play(it) } },
-                        onDownload = { uiViewModel.setSongActionsVisible(true, toSong(it)) },
-                        onToggle = { toggleSelect(it) },
-                        onBatch = { st.pickerVisible = true },
-                        onOpenArtist = {
-                            val name = data.artist.trim()
-                            if (name.isNotEmpty()) {
-                                scope.launch {
-                                    val resolved = resolveArtist(
-                                        data.platform,
-                                        name,
-                                        data.artistId.ifEmpty { null },
-                                    )
-                                    if (resolved != null && resolved.id.isNotEmpty()) {
-                                        uiViewModel.pushRoute(
-                                            SingerRoute(
-                                                SingerDetailData(
-                                                    id = resolved.id,
-                                                    name = resolved.name,
-                                                    picture = resolved.picture,
-                                                    platform = data.platform,
-                                                ),
+            val motionHero = st.motionCover.isNotEmpty()
+            var barBottomPx by remember { mutableStateOf(0) }
+            val body: @Composable (Boolean, Int) -> Unit = { motion, barPx ->
+                AlbumDetailBody(
+                    st = st,
+                    data = data,
+                    tasks = tasks,
+                    palette = palette,
+                    currentSongId = playerState.currentSong?.id,
+                    onPlay = { scope.launch { play(it) } },
+                    onDownload = { uiViewModel.setSongActionsVisible(true, toSong(it)) },
+                    // 行尾爱心的收藏键按 `Song` 算，转换只在这一处做（行内别现拼）
+                    toSongForLike = { toSong(it) },
+                    onToggle = { toggleSelect(it) },
+                    onBatch = { st.pickerVisible = true },
+                    onAddToPlaylist = {
+                        val picked = st.songs.filter { st.selectedIds.contains(it.id) }.map(::toSong)
+                        if (picked.isNotEmpty()) {
+                            uiViewModel.openPlaylistPicker(
+                                PlaylistPickerRequest(songs = picked, scope = PlaylistScope.online),
+                            )
+                        }
+                    },
+                    onOpenArtist = {
+                        val name = data.artist.trim()
+                        if (name.isNotEmpty()) {
+                            scope.launch {
+                                val resolved = resolveArtist(
+                                    data.platform,
+                                    name,
+                                    data.artistId.ifEmpty { null },
+                                )
+                                if (resolved != null && resolved.id.isNotEmpty()) {
+                                    uiViewModel.pushRoute(
+                                        SingerRoute(
+                                            SingerDetailData(
+                                                id = resolved.id,
+                                                name = resolved.name,
+                                                picture = resolved.picture,
+                                                platform = data.platform,
                                             ),
-                                        )
-                                    }
+                                        ),
+                                    )
                                 }
                             }
+                        }
+                    },
+                    motionHero = motion,
+                    barBottomPx = barPx,
+                )
+            }
+            if (motionHero) {
+                body(true, barBottomPx)
+                DetailTopBar(
+                    onClose = { requestClose() },
+                    loading = st.loading,
+                    actions = if (st.songs.isNotEmpty()) {
+                        {
+                            SelectModeActions(
+                                selectMode = st.selectMode,
+                                selectedAll = st.selectedIds.size == st.songs.size,
+                                onToggleSelectAll = { toggleSelectAll() },
+                                onToggleSelectMode = { toggleSelectMode() },
+                                palette = palette,
+                            )
+                        }
+                    } else {
+                        null
+                    },
+                    modifier = Modifier
+                        .align(Alignment.TopCenter)
+                        .onSizeChanged { barBottomPx = it.height },
+                )
+            } else {
+                Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
+                    DetailTopBar(
+                        onClose = { requestClose() },
+                        loading = st.loading,
+                        topInset = false,
+                        actions = if (st.songs.isNotEmpty()) {
+                            {
+                                SelectModeActions(
+                                    selectMode = st.selectMode,
+                                    selectedAll = st.selectedIds.size == st.songs.size,
+                                    onToggleSelectAll = { toggleSelectAll() },
+                                    onToggleSelectMode = { toggleSelectMode() },
+                                    palette = palette,
+                                )
+                            }
+                        } else {
+                            null
                         },
                     )
+                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                        body(false, 0)
+                    }
                 }
             }
         }
@@ -524,67 +620,6 @@ private fun AlbumDetailContent(
     }
 }
 
-/** 返回条：chevron_left + 「专辑详情」+（多选时）全选 / 取消全选 + 多选 / 取消 */
-@Composable
-private fun AlbumDetailHeader(
-    selectMode: Boolean,
-    selectedAll: Boolean,
-    onClose: () -> Unit,
-    onToggleSelectAll: () -> Unit,
-    onToggleSelectMode: () -> Unit,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = AppSpacing.sp12, end = AppSpacing.sp12, top = AppSpacing.sp40, bottom = AppSpacing.sp4),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .clickableRipple(onClose)
-                .padding(AppSpacing.sp4),
-            contentAlignment = Alignment.Center,
-        ) {
-            DetailChevronLeft(modifier = Modifier.size(AppIconSize.icon22), tint = AppColors.textSecondary)
-        }
-        Spacer(modifier = Modifier.width(AppSpacing.sp8))
-        Text(
-            text = "专辑详情",
-            color = AppColors.textPrimary,
-            fontSize = AppFontSize.size17,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-        )
-        Spacer(modifier = Modifier.weight(1f))
-        if (selectMode) {
-            Box(
-                modifier = Modifier
-                    .clickableRipple(onToggleSelectAll)
-                    .padding(AppSpacing.sp4),
-            ) {
-                Text(
-                    text = if (selectedAll) "取消全选" else "全选",
-                    color = AppColors.primary,
-                    fontSize = AppFontSize.size13,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-        }
-        Box(
-            modifier = Modifier
-                .clickableRipple(onToggleSelectMode)
-                .padding(AppSpacing.sp4),
-        ) {
-            Text(
-                text = if (selectMode) "取消" else "多选",
-                color = AppColors.primary,
-                fontSize = AppFontSize.size13,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-    }
-}
-
 @Composable
 private fun AlbumDetailBody(
     st: AlbumDetailState,
@@ -594,9 +629,13 @@ private fun AlbumDetailBody(
     currentSongId: String?,
     onPlay: (AlbumSong) -> Unit,
     onDownload: (AlbumSong) -> Unit,
+    toSongForLike: (AlbumSong) -> Song,
     onToggle: (String) -> Unit,
     onBatch: () -> Unit,
+    onAddToPlaylist: () -> Unit,
     onOpenArtist: () -> Unit,
+    motionHero: Boolean,
+    barBottomPx: Int,
 ) {
     when {
         st.loading -> {
@@ -625,60 +664,175 @@ private fun AlbumDetailBody(
         }
 
         else -> {
-            // 列表直接铺在封面取色背景上（不套玻璃面板）
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(horizontal = AppSpacing.sp12, vertical = AppSpacing.sp8),
-            ) {
+            val multiDisc = st.songs.mapNotNull { it.discNumber }.distinct().size > 1
+            if (motionHero) {
                 val listState = rememberLazyListState()
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize().shortScrollbar(listState),
-                    // 底部内边距保留「迷你条 + 手势条」空间
-                    contentPadding = PaddingValues(bottom = AppSpacing.listBottomInset),
-                ) {
-                    item {
-                        AlbumDetailHero(
-                            st = st,
-                            data = data,
-                            onPlayAll = { st.songs.firstOrNull()?.let(onPlay) },
-                            onBatch = onBatch,
-                            onOpenArtist = onOpenArtist,
-                        )
-                    }
-                    val multiDisc = st.songs.mapNotNull { it.discNumber }.distinct().size > 1
-                    items(count = st.songs.size) { index ->
-                        val song = st.songs[index]
-                        val newDisc = multiDisc &&
-                            (index == 0 || st.songs[index - 1].discNumber != song.discNumber)
-                        Column {
-                            if (newDisc) {
-                                Text(
-                                    text = "CD ${song.discNumber ?: 1}",
-                                    color = AppColors.textTertiary,
-                                    fontSize = AppFontSize.size13,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(
-                                        horizontal = AppSpacing.sp16,
-                                        vertical = AppSpacing.sp10,
-                                    ),
+                Box(modifier = Modifier.fillMaxSize().clipToBounds()) {
+                    MotionHeroScaffold(
+                        aspectRatio = 0.75f,
+                        barBottomPx = barBottomPx,
+                        listState = listState,
+                        bottomInset = AppSpacing.listBottomInset,
+                        video = { AlbumMotionHeroVideo(st = st, data = data) },
+                        foreground = {
+                            AlbumMotionHero(
+                                st = st,
+                                data = data,
+                                toSongForLike = toSongForLike,
+                                onPlayAll = { st.songs.firstOrNull()?.let(onPlay) },
+                                onShuffleAll = { st.songs.randomOrNull()?.let(onPlay) },
+                                onBatch = onBatch,
+                                onAddToPlaylist = onAddToPlaylist,
+                                onOpenArtist = onOpenArtist,
+                            )
+                        },
+                    ) {
+                        items(count = st.songs.size) { index ->
+                            val song = st.songs[index]
+                            val newDisc = multiDisc &&
+                                (index == 0 || st.songs[index - 1].discNumber != song.discNumber)
+                            Column {
+                                if (newDisc) {
+                                    Text(
+                                        text = "CD ${song.discNumber ?: 1}",
+                                        color = AppColors.textTertiary,
+                                        fontSize = AppFontSize.size13,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(
+                                            horizontal = AppSpacing.sp16,
+                                            vertical = AppSpacing.sp10,
+                                        ),
+                                    )
+                                }
+                                AlbumDetailSongRow(
+                                    song = song,
+                                    songForLike = toSongForLike(song),
+                                    index = index,
+                                    selectMode = st.selectMode,
+                                    selected = st.selectedIds.contains(song.id),
+                                    isPlaying = song.id == currentSongId,
+                                    playingTint = palette.readablePrimary(),
+                                    task = tasks[song.id],
+                                    onPlay = onPlay,
+                                    onDownload = onDownload,
+                                    onToggle = onToggle,
                                 )
                             }
-                            AlbumDetailSongRow(
-                                song = song,
-                                index = index,
-                                selectMode = st.selectMode,
-                                selected = st.selectedIds.contains(song.id),
-                                isPlaying = song.id == currentSongId,
-                                playingTint = palette.readablePrimary(),
-                                task = tasks[song.id],
-                                onPlay = onPlay,
-                                onDownload = onDownload,
-                                onToggle = onToggle,
-                            )
                         }
                     }
+
+                    val resumeIndex = remember(st.songs, currentSongId) {
+                        if (currentSongId.isNullOrEmpty()) {
+                            null
+                        } else {
+                            st.songs.indexOfFirst { it.id == currentSongId }.takeIf { it >= 0 }
+                        }
+                    }
+                    val resumeVisible = rememberPlayingRowVisible(listState, resumeIndex)
+                    val resumeScope = rememberCoroutineScope()
+                    ResumePlayingPill(
+                        visible = resumeIndex != null && !resumeVisible,
+                        palette = palette,
+                        onClick = {
+                            if (resumeIndex != null) {
+                                resumeScope.launch { listState.animateScrollToItem(resumeIndex) }
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(
+                                end = AppSpacing.sp16,
+                                bottom = AppSpacing.bottomBarInset + AppSpacing.sp12,
+                            ),
+                    )
+                }
+            } else {
+                // 列表直接铺在封面取色背景上（不套玻璃面板）
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(horizontal = AppSpacing.sp12, vertical = AppSpacing.sp8),
+                ) {
+                    val listState = rememberLazyListState()
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize().shortScrollbar(listState),
+                        // 底部内边距保留「迷你条 + 手势条」空间
+                        contentPadding = PaddingValues(bottom = AppSpacing.listBottomInset),
+                    ) {
+                        item {
+                            AlbumDetailHero(
+                                st = st,
+                                data = data,
+                                toSongForLike = toSongForLike,
+                                onPlayAll = { st.songs.firstOrNull()?.let(onPlay) },
+                                onShuffleAll = { st.songs.randomOrNull()?.let(onPlay) },
+                                onBatch = onBatch,
+                                onAddToPlaylist = onAddToPlaylist,
+                                onOpenArtist = onOpenArtist,
+                            )
+                        }
+                        items(count = st.songs.size) { index ->
+                            val song = st.songs[index]
+                            val newDisc = multiDisc &&
+                                (index == 0 || st.songs[index - 1].discNumber != song.discNumber)
+                            Column {
+                                if (newDisc) {
+                                    Text(
+                                        text = "CD ${song.discNumber ?: 1}",
+                                        color = AppColors.textTertiary,
+                                        fontSize = AppFontSize.size13,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(
+                                            horizontal = AppSpacing.sp16,
+                                            vertical = AppSpacing.sp10,
+                                        ),
+                                    )
+                                }
+                                AlbumDetailSongRow(
+                                    song = song,
+                                    // 行尾爱心要一个 `Song`（收藏键由它算），转换在这里做一次
+                                    songForLike = toSongForLike(song),
+                                    index = index,
+                                    selectMode = st.selectMode,
+                                    selected = st.selectedIds.contains(song.id),
+                                    isPlaying = song.id == currentSongId,
+                                    playingTint = palette.readablePrimary(),
+                                    task = tasks[song.id],
+                                    onPlay = onPlay,
+                                    onDownload = onDownload,
+                                    onToggle = onToggle,
+                                )
+                            }
+                        }
+                    }
+
+                    val staticRowIndex = remember(st.songs, currentSongId) {
+                        if (currentSongId.isNullOrEmpty()) {
+                            null
+                        } else {
+                            st.songs.indexOfFirst { it.id == currentSongId }
+                                .takeIf { it >= 0 }
+                                ?.plus(1)
+                        }
+                    }
+                    val staticVisible = rememberPlayingRowVisible(listState, staticRowIndex)
+                    val staticScope = rememberCoroutineScope()
+                    ResumePlayingPill(
+                        visible = staticRowIndex != null && !staticVisible,
+                        palette = palette,
+                        onClick = {
+                            if (staticRowIndex != null) {
+                                staticScope.launch { listState.animateScrollToItem(staticRowIndex) }
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(
+                                end = AppSpacing.sp16,
+                                bottom = AppSpacing.bottomBarInset + AppSpacing.sp12,
+                            ),
+                    )
                 }
             }
         }
@@ -695,8 +849,11 @@ private fun AlbumDetailBody(
 private fun AlbumDetailHero(
     st: AlbumDetailState,
     data: AlbumDetailData,
+    toSongForLike: (AlbumSong) -> Song,
     onPlayAll: () -> Unit,
+    onShuffleAll: () -> Unit,
     onBatch: () -> Unit,
+    onAddToPlaylist: () -> Unit,
     onOpenArtist: () -> Unit,
 ) {
     // 收藏状态就地取（Activity 作用域的 VM，任何层级取到的都是同一份）；
@@ -717,7 +874,7 @@ private fun AlbumDetailHero(
     ) {
         Box(
             modifier = Modifier
-                .fillMaxWidth(0.58f)
+                .fillMaxWidth(0.68f)
                 .aspectRatio(1f)
                 .clip(RoundedCornerShape(AppRadius.panel))
                 .background(Color.Transparent),
@@ -767,8 +924,134 @@ private fun AlbumDetailHero(
                 textAlign = TextAlign.Center,
             )
         }
-        Spacer(modifier = Modifier.height(AppSpacing.sp16))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        // 间距与静态封面模式一致：动作行上下各 16dp（原来这里是裸 Spacer + 行自身无边距，
+        // 两种模式切换时按钮会上下跳一格）
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = AppSpacing.sp16),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AlbumHeroActions(
+                toSongForLike = toSongForLike,
+                st = st,
+                data = data,
+                favorited = favorited,
+                favoriteViewModel = favoriteViewModel,
+                onPlayAll = onPlayAll,
+                onShuffleAll = onShuffleAll,
+                onBatch = onBatch,
+                onAddToPlaylist = onAddToPlaylist,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AlbumMotionHeroVideo(
+    st: AlbumDetailState,
+    data: AlbumDetailData,
+) {
+    DetailMotionHeroVideo(
+        cover = data.cover,
+        tallCover = st.tallCover.ifEmpty { data.cover },
+        motionCover = st.motionCover,
+    )
+}
+
+@Composable
+private fun AlbumMotionHero(
+    st: AlbumDetailState,
+    data: AlbumDetailData,
+    toSongForLike: (AlbumSong) -> Song,
+    onPlayAll: () -> Unit,
+    onShuffleAll: () -> Unit,
+    onBatch: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onOpenArtist: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val favoriteViewModel: FavoriteViewModel = activityViewModel()
+    val favoriteSnapshot by favoriteViewModel.snapshot.collectAsState()
+    val favoriteKey = remember(data.id, data.platform) {
+        FavoriteKeys.album(data.platform, data.id, data.name, data.artist)
+    }
+    val favorited = remember(favoriteSnapshot, favoriteKey) {
+        favoriteViewModel.isAlbumFavorite(favoriteKey)
+    }
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        DetailMotionHeroForeground(
+            aspectRatio = 0.75f,
+            title = data.name,
+            subtitle = data.artist,
+            meta = albumDetailMetaLine(st),
+            onSubtitleClick = { onOpenArtist() },
+        )
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = AppSpacing.sp16),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            AlbumMotionHeroActions(
+                toSongForLike = toSongForLike,
+                st = st,
+                data = data,
+                favorited = favorited,
+                favoriteViewModel = favoriteViewModel,
+                onPlayAll = onPlayAll,
+                onShuffleAll = onShuffleAll,
+                onBatch = onBatch,
+                onAddToPlaylist = onAddToPlaylist,
+            )
+        }
+    }
+}
+
+@Composable
+private fun AlbumHeroActions(
+    st: AlbumDetailState,
+    data: AlbumDetailData,
+    favorited: Boolean,
+    favoriteViewModel: FavoriteViewModel,
+    toSongForLike: (AlbumSong) -> Song,
+    onPlayAll: () -> Unit,
+    onShuffleAll: () -> Unit,
+    onBatch: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+) {
+    // 「加入到歌单」交给宿主打开「添加到」面板（见 PlaylistPickerRequest）：内联渲染会被底栏压住
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        // **永不溢出**的排法：中间三颗放进一个 weight(1f) 的槽里自己居中，两端按钮贴槽外侧。
+        // 之前是固定 16dp 间距的居中整组，多选态 5 件合计 333dp > 可用 315dp（hero 左右各 24dp）
+        // 就会溢出：左边的挤进内边距、右边的被推出容器。用 weight 后中间槽会随可用宽度收缩，
+        // 永远不会出现「内容比容器宽」。
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        if (st.selectMode) {
+            DetailRoundIconButton(
+                onClick = onAddToPlaylist,
+                enabled = st.selectedIds.isNotEmpty(),
+            ) { tint ->
+                Icon(
+                    painter = painterResource(R.drawable.ic_action_playlist_add),
+                    contentDescription = "加入到歌单",
+                    tint = tint,
+                    modifier = Modifier.size(AppIconSize.icon22),
+                )
+            }
+        }
+        Row(
+            modifier = Modifier.weight(1f),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             DetailHeartButton(
                 selected = favorited,
                 onClick = {
@@ -792,8 +1075,21 @@ private fun AlbumDetailHero(
             )
             Spacer(modifier = Modifier.width(AppSpacing.sp16))
             DetailRoundIconButton(
+                onClick = onShuffleAll,
+                enabled = st.songs.isNotEmpty(),
+            ) { tint ->
+                Icon(
+                    painter = painterResource(R.drawable.ic_action_shuffle),
+                    contentDescription = "随机播放",
+                    tint = tint,
+                    modifier = Modifier.size(AppIconSize.icon22),
+                )
+            }
+        }
+        if (st.selectMode) {
+            DetailRoundIconButton(
                 onClick = onBatch,
-                enabled = st.selectMode && st.selectedIds.isNotEmpty(),
+                enabled = st.selectedIds.isNotEmpty(),
             ) { tint ->
                 DownloadIconPlaceholder(
                     modifier = Modifier.size(AppIconSize.icon20),
@@ -801,14 +1097,92 @@ private fun AlbumDetailHero(
                 )
             }
         }
+    }
+}
+
+/**
+ * 动态封面 hero 的动作行：**旧排法**（固定 16dp 间距、整组居中）。
+ *
+ * 静态封面 hero 用 [AlbumHeroActions] 的「weight 中间槽」排法 —— 那一页 hero 左右各有 24dp
+ * 内边距，多选态 5 件会超过可用宽度；动态封面 hero 没有这层内边距，宽度够用，
+ * 所以这里保留原来的居中整组，两种模式各按自己的容器宽度办事。
+ */
+@Composable
+private fun AlbumMotionHeroActions(
+    st: AlbumDetailState,
+    data: AlbumDetailData,
+    favorited: Boolean,
+    favoriteViewModel: FavoriteViewModel,
+    toSongForLike: (AlbumSong) -> Song,
+    onPlayAll: () -> Unit,
+    onShuffleAll: () -> Unit,
+    onBatch: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.Center,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
         if (st.selectMode) {
-            Spacer(modifier = Modifier.height(AppSpacing.sp8))
-            Text(
-                text = "已选 ${st.selectedIds.size} 首",
-                color = AppColors.whiteA50,
-                fontSize = AppFontSize.size13,
-                textAlign = TextAlign.Center,
+            DetailRoundIconButton(
+                onClick = onAddToPlaylist,
+                enabled = st.selectedIds.isNotEmpty(),
+            ) { tint ->
+                Icon(
+                    painter = painterResource(R.drawable.ic_action_playlist_add),
+                    contentDescription = "加入到歌单",
+                    tint = tint,
+                    modifier = Modifier.size(AppIconSize.icon22),
+                )
+            }
+            Spacer(modifier = Modifier.width(AppSpacing.sp16))
+        }
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            DetailHeartButton(
+                selected = favorited,
+                onClick = {
+                    favoriteViewModel.toggleAlbum(
+                        platform = data.platform,
+                        albumId = data.id,
+                        name = data.name,
+                        artist = data.artist,
+                        cover = data.cover,
+                        trackCount = st.songs.size,
+                        releaseDate = st.releaseDate,
+                        artistId = data.artistId,
+                    )
+                },
             )
+            Spacer(modifier = Modifier.width(AppSpacing.sp16))
+            DetailPlayAllPill(
+                onClick = onPlayAll,
+                enabled = st.songs.isNotEmpty(),
+            )
+            Spacer(modifier = Modifier.width(AppSpacing.sp16))
+            DetailRoundIconButton(
+                onClick = onShuffleAll,
+                enabled = st.songs.isNotEmpty(),
+            ) { tint ->
+                Icon(
+                    painter = painterResource(R.drawable.ic_action_shuffle),
+                    contentDescription = "随机播放",
+                    tint = tint,
+                    modifier = Modifier.size(AppIconSize.icon22),
+                )
+            }
+        }
+        if (st.selectMode) {
+            Spacer(modifier = Modifier.width(AppSpacing.sp16))
+            DetailRoundIconButton(
+                onClick = onBatch,
+                enabled = st.selectedIds.isNotEmpty(),
+            ) { tint ->
+                DownloadIconPlaceholder(
+                    modifier = Modifier.size(AppIconSize.icon20),
+                    tint = tint,
+                )
+            }
         }
     }
 }
@@ -827,6 +1201,7 @@ private fun albumDetailMetaLine(st: AlbumDetailState): String {
 @Composable
 private fun AlbumDetailSongRow(
     song: AlbumSong,
+    songForLike: Song,
     index: Int,
     selectMode: Boolean,
     selected: Boolean,
@@ -901,14 +1276,8 @@ private fun AlbumDetailSongRow(
         } else if (task != null && task.status != DownloadStatus.completed) {
             AlbumDetailTaskBadge(task = task)
         } else {
-            // 命中区与多选勾选框同位同宽（都是 48dp）：切多选时文字区不横向跳一格
-            Box(
-                modifier = Modifier
-                    .minimumInteractiveComponentSize()
-                    .semantics { contentDescription = "更多操作 ${song.name}" },
-            ) {
-                SongMoreButton(onClick = { onDownload(song) })
-            }
+            // ♥ · ⋮：收藏状态由宿主经 `LocalSongLike` 注入
+            SongRowActions(song = songForLike, onMore = { onDownload(song) })
         }
     }
 }

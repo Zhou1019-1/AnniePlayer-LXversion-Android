@@ -169,10 +169,8 @@ data class AudioOutputStatus(
     val replayGainDb: Float = 0f,
     /** 轴 2：这一首走的是哪条解码路径（`OutputPlan.decode`） */
     val decode: DecodeKind = DecodeKind.ffmpegSoft,
-    /** 轴 3：PCM 走哪条通路（`OutputPlan.path`）；蓝牙会被强制成 systemMix */
-    val outputPath: OutputPath = OutputPath.systemMix,
-    /** 这一首**实际**开了哪条通路；与 [outputPath]（意图）不同即降级 */
-    val effectivePath: OutputPath = OutputPath.systemMix,
+    val outputPath: SinkKind = SinkKind.audioTrack,
+    val effectivePath: SinkKind = SinkKind.audioTrack,
     /** 意图未被满足时的说明；null = 意图已达成，或本来就走系统通路 */
     val downgrade: DowngradeNotice? = null,
     /**
@@ -216,9 +214,7 @@ data class AudioOutputStatus(
         get() {
             if (tier == OutputTier.bitPerfect) return false
             if (didResample) return false
-            if (effectivePath == OutputPath.usbDirect ||
-                effectivePath == OutputPath.aaudioExclusive
-            ) {
+            if (effectivePath == SinkKind.usbUac || effectivePath == SinkKind.oboe) {
                 return false
             }
             val spec = outputSpecOf(this)

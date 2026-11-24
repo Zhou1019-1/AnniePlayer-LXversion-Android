@@ -21,6 +21,7 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
@@ -297,7 +298,7 @@ fun PlaceholderText(text: String, modifier: Modifier = Modifier) {
 }
 
 /** 自绘图标的统一笔画比例（对齐 Material 图标在 24dp 栅格上约 2dp 的线条，见 [LocalLibraryGlyph] 注释） */
-private const val GlyphStrokeRatio = 0.09f
+internal const val GlyphStrokeRatio = 0.09f
 
 /**
  * 黑胶唱片占位（常驻底栏中键「无歌可放」时的封面占位）。
@@ -378,15 +379,13 @@ fun HomeGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
         val h = size.height
         val stroke = w * GlyphStrokeRatio
         val path = Path().apply {
-            // 屋顶：左檐 → 顶点 → 右檐（屋檐略外伸）
-            moveTo(w * 0.09f, h * 0.47f)
-            lineTo(w * 0.50f, h * 0.11f)
-            lineTo(w * 0.91f, h * 0.47f)
-            // 房身：从屋顶斜线内侧起笔 → 左墙 → 底 → 右墙
-            moveTo(w * 0.21f, h * 0.40f)
-            lineTo(w * 0.21f, h * 0.89f)
-            lineTo(w * 0.79f, h * 0.89f)
-            lineTo(w * 0.79f, h * 0.40f)
+            moveTo(w * 0.10f, h * 0.46f)
+            lineTo(w * 0.50f, h * 0.12f)
+            lineTo(w * 0.90f, h * 0.46f)
+            moveTo(w * 0.22f, h * 0.40f)
+            lineTo(w * 0.22f, h * 0.88f)
+            lineTo(w * 0.78f, h * 0.88f)
+            lineTo(w * 0.78f, h * 0.40f)
         }
         drawPath(
             path = path,
@@ -402,40 +401,71 @@ fun HomeGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
  * 语义拆解：圆角矩形 = 唱片套 / 文库，内嵌八分音符 = 音乐，合起来表达「本地音乐库」；
  * 与 [HomeGlyph]、[VinylRecord] 共用 [GlyphStrokeRatio] 的圆头笔画，三个图形并排粗细一致。
  */
+internal fun DrawScope.drawEighthNote(
+    tint: Color,
+    w: Float,
+    h: Float,
+    centerX: Float,
+    centerY: Float,
+    stroke: Float,
+) {
+    val stemX = centerX + w * 0.025f
+    val top = centerY - h * 0.13f
+    val bottom = centerY + h * 0.12f
+    drawLine(tint, Offset(stemX, top), Offset(stemX, bottom), stroke, StrokeCap.Round)
+    drawCircle(tint, radius = w * 0.075f, center = Offset(stemX - w * 0.075f, bottom))
+    drawLine(
+        tint,
+        Offset(stemX, top),
+        Offset(stemX + w * 0.115f, top + h * 0.04f),
+        stroke,
+        StrokeCap.Round,
+    )
+}
+
 @Composable
 fun LocalLibraryGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
     Canvas(modifier = modifier) {
         val w = size.width
         val h = size.height
         val stroke = w * GlyphStrokeRatio
-        val inset = stroke / 2f
-
-        // 外框（唱片套 / 文库）
         drawRoundRect(
             color = tint,
-            topLeft = Offset(inset, h * 0.10f + inset),
-            size = Size(w - stroke, h * 0.80f - stroke),
-            cornerRadius = CornerRadius(w * 0.20f, w * 0.20f),
+            topLeft = Offset(w * 0.10f, h * 0.12f),
+            size = Size(w * 0.80f, h * 0.76f),
+            cornerRadius = CornerRadius(w * 0.16f, w * 0.16f),
             style = Stroke(width = stroke),
         )
-        // 内嵌音符：符干 + 符头 + 符尾（笔画略收细，避免与外框糊在一起）
-        val noteStroke = stroke * 0.88f
-        val stemX = w * 0.60f
-        drawLine(
-            color = tint,
-            start = Offset(stemX, h * 0.30f),
-            end = Offset(stemX, h * 0.62f),
-            strokeWidth = noteStroke,
-            cap = StrokeCap.Round,
-        )
-        drawCircle(color = tint, radius = w * 0.085f, center = Offset(w * 0.505f, h * 0.645f))
-        drawLine(
-            color = tint,
-            start = Offset(stemX, h * 0.30f),
-            end = Offset(w * 0.735f, h * 0.365f),
-            strokeWidth = noteStroke,
-            cap = StrokeCap.Round,
-        )
+        drawEighthNote(tint, w, h, centerX = w * 0.47f, centerY = h * 0.50f, stroke = stroke * 0.88f)
+    }
+}
+
+/**
+ * 「多选」glyph（搜索结果 / 歌手全部单曲的右上角按钮，自绘）。
+ *
+ * 语义拆解：左侧两个勾 + 右侧两条条目线 = 「勾选一批条目」。只画两行是刻意的 ——
+ * 按钮 22dp、笔画 2dp，三行的勾在这个尺寸上会糊成一团。
+ * 与 [PlaylistParseGlyph] 共用 [GlyphStrokeRatio] 的圆头笔画。
+ */
+@Composable
+fun MultiSelectGlyph(modifier: Modifier = Modifier, tint: Color = Color.White) {
+    Canvas(modifier = modifier) {
+        val w = size.width
+        val h = size.height
+        val stroke = w * GlyphStrokeRatio
+
+        // 一个勾：两段折线，围绕行基线 cy
+        fun check(cy: Float) {
+            val knee = Offset(w * 0.20f, cy + h * 0.10f)
+            drawLine(tint, Offset(w * 0.09f, cy), knee, stroke, StrokeCap.Round)
+            drawLine(tint, knee, Offset(w * 0.35f, cy - h * 0.11f), stroke, StrokeCap.Round)
+        }
+
+        check(h * 0.34f)
+        check(h * 0.68f)
+
+        drawLine(tint, Offset(w * 0.50f, h * 0.34f), Offset(w * 0.92f, h * 0.34f), stroke, StrokeCap.Round)
+        drawLine(tint, Offset(w * 0.50f, h * 0.68f), Offset(w * 0.92f, h * 0.68f), stroke, StrokeCap.Round)
     }
 }
 

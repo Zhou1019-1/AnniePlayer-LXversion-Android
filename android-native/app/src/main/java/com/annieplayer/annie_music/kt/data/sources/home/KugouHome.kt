@@ -15,6 +15,8 @@ import com.annieplayer.annie_music.kt.data.sources.kugou.getKuGouQualitySizes
 import com.annieplayer.annie_music.kt.data.sources.kugou.kugouMid
 import com.annieplayer.annie_music.kt.data.sources.kugou.kugouPlainHeaders
 import com.annieplayer.annie_music.kt.data.sources.kugou.kugouSignedPost
+import com.annieplayer.annie_music.kt.data.sources.kugou.fetchKugouSpecialRecRaw
+import com.annieplayer.annie_music.kt.data.sources.kugou.parseKugouSpecialRec
 
 // ================================================================================================
 // 酷狗主页 + 「按风格听」二级页（契约与调度见 HomeFeedApi.kt）
@@ -22,6 +24,22 @@ import com.annieplayer.annie_music.kt.data.sources.kugou.kugouSignedPost
 
 /** 一个可选流派（酷狗风格行的一张卡）。 */
 data class KugouStyleOption(val tagIds: String, val name: String)
+
+private class KugouSpecialRow(
+    val cacheKey: String,
+    val shelfId: String,
+    val title: String,
+    val subtitle: String,
+    val sort: Int,
+    val page: Int,
+)
+
+private val KugouSpecialRows: List<KugouSpecialRow> = listOf(
+    KugouSpecialRow("pick", "kugou:special", "精选歌单", "酷狗编辑推荐", 3, 1),
+    KugouSpecialRow("hot", "kugou:special:hot", "热门歌单", "播放最多", 1, 1),
+    KugouSpecialRow("new", "kugou:special:new", "最新歌单", "刚刚创建", 2, 1),
+    KugouSpecialRow("more", "kugou:special:more", "更多精选", "换一批看看", 3, 2),
+)
 
 /**
  * 酷狗「按风格听」可选的流派（实测 S1–S20；S21 以上服务端一律回落到华语流行）。
@@ -99,6 +117,37 @@ internal suspend fun fetchHomeKugou(discoverToken: Int): List<HomeShelf> {
             )
         },
     )
+
+    val usedSpecialKeys = HashSet<String>()
+    for (row in KugouSpecialRows) {
+        val raw = cachedKugouKey("specialrec:${row.cacheKey}") {
+            fetchKugouSpecialRecRaw(
+                page = row.page,
+                pageSize = HomeCardsMax + 10,
+                categoryId = "0",
+                sort = row.sort,
+            )
+        }
+        val items = parseKugouSpecialRec(raw ?: emptyMap()).mapNotNull { item ->
+            val key = "kugou:special:${item.id}"
+            if (!usedSpecialKeys.add(key)) return@mapNotNull null
+            HomeItem(
+                key = key,
+                title = item.name,
+                subtitle = playlistSubtitle(item.playCount, 0),
+                cover = item.cover,
+                style = HomeCardStyle.Playlist,
+                target = HomeTarget.Playlist(MusicPlatform.kugou, item.id, item.name, item.cover),
+            )
+        }
+        if (items.isEmpty()) continue
+        out += HomeShelf.Cards(
+            id = row.shelfId,
+            title = row.title,
+            subtitle = row.subtitle,
+            items = items.take(HomePlaylistsMax),
+        )
+    }
 
     // ② 首页刷歌（沉浸式推荐流，pagesize 直接给 50）。`discoverToken` 只进缓存 key，
     //    点「换一批」时 +1 → 绕过旧缓存拿新的一批
@@ -215,7 +264,9 @@ private suspend fun cachedKugouKey(
     fetch: suspend () -> Map<String, Any?>,
 ): Map<String, Any?>? {
     val key = HomeCachePrefix + "kugou:" + suffix
-    cacheService.get<Map<String, Any?>>(key)?.let { return it }
+    if (!homeCacheForceActive()) {
+        cacheService.get<Map<String, Any?>>(key)?.let { return it }
+    }
     val fresh = runCatching { fetch() }.getOrNull() ?: return null
     if (fresh.isNotEmpty()) cacheService.set(key, fresh, HomeCacheTtlMs)
     return fresh

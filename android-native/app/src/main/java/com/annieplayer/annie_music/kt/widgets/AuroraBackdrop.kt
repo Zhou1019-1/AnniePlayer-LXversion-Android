@@ -5,6 +5,9 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.RadialGradient
 import android.graphics.Shader
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
@@ -13,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
@@ -52,6 +56,8 @@ import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 // ================================================================================================
 // 全站变色页共享背景：**Aurora Field（色域极光）**
@@ -173,6 +179,9 @@ private const val LowFrequencyNoiseAlpha = 0.45f
  * 砍到 1/4 像素让换封面时的重烤从 ~30ms 掉到 ~7ms。
  */
 private const val LiteDownscale = 2
+
+/** 换封面时两张烤图的交叉淡入时长（与原「颜色补间」的 900ms 一致）。 */
+private const val AuroraCrossFadeMs = 900
 
 /** 色相慢漂移幅度（度）。各槽位周期不同，静止图上看不出动作。 */
 private const val HueDriftDegrees = 4f
@@ -794,24 +803,53 @@ fun CoverPaletteBackdrop(
         canvasSize,
     )
 
+    // 交叉淡入：切歌时旧图留着、新图从 0 淡到 1。
+    // **不能**改成「补间期间逐帧重烤」—— 那等于把那十几层全屏混合按帧重放一次，
+    // 正好把卡顿放在用户最注意的切歌那一刻。这里每帧只多一次 blit。
+    val baked by produceState<ImageBitmap?>(null, bakeKeys) {
+        val w = canvasSize.width / LiteDownscale
+        val h = canvasSize.height / LiteDownscale
+        value = if (w <= 1 || h <= 1) {
+            null
+        } else {
+            withContext(Dispatchers.Default) { bakeAurora(w, h) { drawAuroraStack(stack, 0f) } }
+        }
+    }
+    var shown by remember { mutableStateOf<ImageBitmap?>(null) }
+    var fadingOut by remember { mutableStateOf<ImageBitmap?>(null) }
+    val crossFade = remember { Animatable(1f) }
+    LaunchedEffect(baked) {
+        val next = baked ?: return@LaunchedEffect
+        val old = shown
+        shown = next
+        if (old != null && old !== next) {
+            fadingOut = old
+            crossFade.snapTo(0f)
+            crossFade.animateTo(1f, tween(AuroraCrossFadeMs, easing = LinearEasing))
+            fadingOut = null
+        } else {
+            crossFade.snapTo(1f)
+        }
+    }
+
     Box(
         modifier = modifier
             .background(base)
             .onSizeChanged { canvasSize = it },
     ) {
         // 整叠（底色→色晕→色斑→网格明暗→噪声→暗角）烤成一张 1/2 分辨率的图。
-        // 每帧十余层全屏混合在这类 GPU 上是 40ms 起步（SM6225 实测 44ms/帧，
+        // 逐帧画这十余层全屏混合在弱 GPU 上是 40ms 起步（SM6225 实测 44ms/帧，
         // 其中 82% 是纯填充），而烤图后每帧只剩一次 blit。
-        val baked = remember(bakeKeys) {
-            val w = canvasSize.width / LiteDownscale
-            val h = canvasSize.height / LiteDownscale
-            if (w <= 1 || h <= 1) null else bakeAurora(w, h) { drawAuroraStack(stack, 0f) }
-        }
         Canvas(modifier = Modifier.fillMaxSize()) {
-            baked ?: return@Canvas
+            val target = IntSize(size.width.roundToInt(), size.height.roundToInt())
+            fadingOut?.let {
+                drawImage(image = it, dstSize = target, filterQuality = FilterQuality.Low)
+            }
+            val current = shown ?: return@Canvas
             drawImage(
-                image = baked,
-                dstSize = IntSize(size.width.roundToInt(), size.height.roundToInt()),
+                image = current,
+                dstSize = target,
+                alpha = crossFade.value,
                 filterQuality = FilterQuality.Low,
             )
         }

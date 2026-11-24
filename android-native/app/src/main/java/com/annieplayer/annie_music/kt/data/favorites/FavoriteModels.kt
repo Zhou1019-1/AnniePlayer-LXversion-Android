@@ -134,6 +134,12 @@ data class UserPlaylist(
     val songs: List<Song> = emptyList(),
 )
 
+val UserPlaylist.fallbackCover: String
+    get() = cover.ifBlank { songs.lastOrNull { it.cover.isNotBlank() }?.cover.orEmpty() }
+
+val UserPlaylist.songsNewestFirst: List<Song>
+    get() = songs.asReversed()
+
 /** 收藏库的一次性快照（UI 层订阅它，避免每处各读一次磁盘）。 */
 data class FavoriteSnapshot(
     val mode: FavoriteMode = FavoriteMode.online,

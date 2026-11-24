@@ -16,8 +16,11 @@ import com.annieplayer.annie_music.kt.data.sources.common.encodeComponent
  * 传语言码取该语言译文）；第二步对该 URL 发裸 GET 才拿到正文。
  * 服务端行时间是毫秒，转成 `[mm:ss.mmm]` LRC 以复用现有歌词解析/渲染管线。
  *
- * [translateLang] 为空或不在可用语言清单里时不拉译文（返回 [QobuzLyricResult.tlyric] = null）；
- * [autoPickFirst] 为 true 时改为默认取清单里第一个可用语言（播放页没显式选语言时的默认行为）。
+ * [translateLang] 是「用户显式选的语言」：为空时按 [autoPickFirst] 决定要不要默认取一个，
+ * **非空时绝不再替用户挑语言** —— 该语言不在 [QobuzLyricResult.translateLangs] 里就当作
+ * 「这首歌没有该语言译文」，返回 [QobuzLyricResult.tlyric] = null 且原样带回语言清单，
+ * 让界面能说明情况。以前这里会退化成 `langs.firstOrNull()`，结果是下拉里写着「中文」、
+ * 正文却是德语，比没有译文更糟；而且下一次重取时清单又被覆盖成空，整条下拉都消失。
  */
 suspend fun fetchQobuzLyrics(
     trackId: String,
@@ -31,11 +34,7 @@ suspend fun fetchQobuzLyrics(
         ?.filter { it.isNotEmpty() }
         .orEmpty()
     val lrc = _qobuzLyricsDtoToLrc(original["original"])
-    val effective = when {
-        !translateLang.isNullOrEmpty() && translateLang in langs -> translateLang
-        autoPickFirst -> langs.firstOrNull()
-        else -> null
-    }
+    val effective = pickQobuzTranslateLang(langs, translateLang, autoPickFirst)
     if (effective == null) {
         return QobuzLyricResult(lrc = lrc, tlyric = null, translateLangs = langs)
     }
@@ -46,6 +45,23 @@ suspend fun fetchQobuzLyrics(
         translateLangs = langs,
         translateLang = effective,
     )
+}
+
+/**
+ * 决定这次取哪种译文语言。**显式指定优先于自动挑**：`asked` 非空而不可用时返回 null，
+ * 绝不退化成 [langs] 里的第一个 —— 那种「替用户换语言」的表现比没有译文更糟。
+ */
+internal fun pickQobuzTranslateLang(
+    langs: List<String>,
+    asked: String?,
+    autoPickFirst: Boolean,
+): String? {
+    val want = asked?.takeIf { it.isNotEmpty() }
+    return when {
+        want != null -> want.takeIf { it in langs }
+        autoPickFirst -> langs.firstOrNull()
+        else -> null
+    }
 }
 
 /** 取签名 URL 再裸 GET，返回歌词 JSON */

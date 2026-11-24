@@ -42,17 +42,50 @@ data class CoverBytes(val bytes: ByteArray, val mime: String) {
  *   MP4 是 `----` freeform 的 name（如 `BPM`）、Vorbis 是任意大写 `KEY`、ID3 是 `TXXX` 的描述。
  *   加这类字段**不需要改打标库**，而且读取时未知的键会原样落进这里 —— 保证「读出→写回」不丢数据。
  *
- * 写入语义：给了就覆盖，没给就保留文件里原来的值（各 codec 内部会先读一遍现有标签再合并）。
+ * 写入语义：给了就覆盖，没给就保留文件里原来的值（各 codec 内部会先读一遍现有标签再合并，
+ * 合并规则只在 [mergedWith] 里写一份）。**清空**必须走 [cleared] / [removeCover] ——
+ * 空串与 null 在合并时都表示「保留」，拿它们当删除是不生效的。
  */
 data class TagBag(
     val text: Map<TagKey, String> = emptyMap(),
     val cover: CoverBytes? = null,
     val extra: Map<String, String> = emptyMap(),
+    /**
+     * 显式删除这些字段。
+     *
+     * 为什么不能用「值给空串」表达删除：合并后 `filterValues { it.isNotEmpty() }` 确实会把它丢掉，
+     * 但只清一个字段时整个 bag 恰好满足 [isEmpty]，`AnnieTag.write` 会在开头直接早退，
+     * 一个字节都不写 —— 表现为「点了清空、保存成功、字段还在」。
+     */
+    val cleared: Set<TagKey> = emptySet(),
+    /**
+     * 显式移除内嵌封面。
+     *
+     * [cover] 为 null 的语义是「保留现有封面」（所有调用方都依赖这一点：只改标题时必须
+     * 不动封面）。要删只能走这个标志。
+     */
+    val removeCover: Boolean = false,
 ) {
     operator fun get(key: TagKey): String? = text[key]?.takeIf { it.isNotEmpty() }
 
     fun isEmpty(): Boolean =
-        text.values.all { it.isEmpty() } && cover == null && extra.values.all { it.isEmpty() }
+        text.values.all { it.isEmpty() } && cover == null &&
+            extra.values.all { it.isEmpty() } && cleared.isEmpty() && !removeCover
+
+    /**
+     * 「文件里已有的标签 + 本次修改」→ 合并后的完整标签。
+     *
+     * 七个 codec 以前各抄一份同样的表达式，改一条规则要改七处（漏一处就是某个格式的
+     * 清空/删封面静默失效）。规则只有三条：
+     * 1. [cleared] 里的键先摘掉，再用 [text] 覆盖；
+     * 2. [removeCover] 优先于 [cover]，两者都给时按删除处理；
+     * 3. 空串一律不算内容（各格式的空值写法不同，统一在合并层剥掉）。
+     */
+    fun mergedWith(existing: TagBag?): TagBag = TagBag(
+        text = (existing?.text.orEmpty() - cleared + text).filterValues { it.isNotEmpty() },
+        cover = if (removeCover) null else cover ?: existing?.cover,
+        extra = (existing?.extra.orEmpty() + extra).filterValues { it.isNotEmpty() },
+    )
 
     companion object {
         fun of(vararg pairs: Pair<TagKey, String?>): TagBag = TagBag(
@@ -63,6 +96,9 @@ data class TagBag(
         fun extraOf(vararg pairs: Pair<String, String?>): TagBag = TagBag(
             extra = pairs.mapNotNull { (k, v) -> v?.takeIf { it.isNotEmpty() }?.let { k to it } }.toMap(),
         )
+
+        /** 删除若干字段。 */
+        fun clearing(vararg keys: TagKey): TagBag = TagBag(cleared = keys.toSet())
     }
 }
 

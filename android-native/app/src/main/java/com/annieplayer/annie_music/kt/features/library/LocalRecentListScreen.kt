@@ -14,6 +14,8 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.style.TextAlign
 import com.annieplayer.annie_music.kt.data.local.LocalLibraryStore
@@ -22,7 +24,11 @@ import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppFontSize
 import com.annieplayer.annie_music.kt.ui.theme.AppRadius
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
+import com.annieplayer.annie_music.kt.ui.theme.LocalCoverThemePalette
+import com.annieplayer.annie_music.kt.widgets.ResumePlayingPill
+import com.annieplayer.annie_music.kt.widgets.rememberPlayingRowVisible
 import com.annieplayer.annie_music.kt.widgets.shortScrollbar
+import kotlinx.coroutines.launch
 
 /**
  * **最近播放**（点宫格「最近播放」弹出）。
@@ -43,6 +49,7 @@ fun LocalRecentListScreen(
     onClose: () -> Unit,
     onPlayAt: (List<LocalTrackMeta>, Int) -> Unit,
     onMore: (LocalTrackMeta) -> Unit,
+    onRequestCover: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
     // 固定排序：**播放次数从多到少**（次数相同看最近一次播放时间）—— 这一页不提供排序切换
@@ -89,6 +96,13 @@ fun LocalRecentListScreen(
                     }
                 } else {
                     val listState = rememberLazyListState()
+                    // 行首封面同样是按需抽的：只对滚到可见的行请求，见 RequestVisibleCovers
+                    val coverRequests = remember(ordered) {
+                        ordered.mapNotNull { (meta, _) ->
+                            if (meta.coverPath != null) null else "r:${meta.path}" to listOf(meta.path)
+                        }.toMap()
+                    }
+                    RequestVisibleCovers(listState, coverRequests, onRequestCover)
                     LazyColumn(
                         state = listState,
                         modifier = Modifier.fillMaxSize().shortScrollbar(listState),
@@ -112,6 +126,32 @@ fun LocalRecentListScreen(
                             )
                         }
                     }
+
+                    val resumeIndex = remember(ordered, currentSongId) {
+                        if (currentSongId.isNullOrEmpty()) {
+                            null
+                        } else {
+                            ordered.indexOfFirst { it.first.id == currentSongId }
+                                .takeIf { it >= 0 }
+                        }
+                    }
+                    val resumeVisible = rememberPlayingRowVisible(listState, resumeIndex)
+                    val scope = rememberCoroutineScope()
+                    ResumePlayingPill(
+                        visible = resumeIndex != null && !resumeVisible,
+                        palette = LocalCoverThemePalette.current,
+                        onClick = {
+                            if (resumeIndex != null) {
+                                scope.launch { listState.animateScrollToItem(resumeIndex) }
+                            }
+                        },
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(
+                                end = AppSpacing.sp16,
+                                bottom = AppSpacing.bottomBarInset + AppSpacing.sp12,
+                            ),
+                    )
                 }
             }
         }

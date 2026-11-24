@@ -90,6 +90,7 @@ fun AppSheet(
      * 屏幕最上面、抓手和标题贴到状态栏，观感像整页而不是面板。传 0.5 就是「最多半屏、多了滑」。
      */
     contentMaxHeightFraction: Float? = null,
+    maxPanelHeightFraction: Float? = null,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     // 返回手势：打开时先关面板
@@ -112,7 +113,8 @@ fun AppSheet(
     // 的点击全部挡掉（现象：界面能显示，但所有按钮点不动）。
     // 因此完全隐藏时**整个浮层不参与组合**，等价 Flutter 的 IgnorePointer(ignoring: !visible)。
     if (!visible && scrimAlpha == 0f) return
-    Box(modifier = modifier.fillMaxSize()) {
+    BoxWithConstraints(modifier = modifier.fillMaxSize()) {
+        val panelMaxHeight = maxPanelHeightFraction?.let { maxHeight * it }
         // ── 遮罩（Flutter: Colors.black54）：只吞点击，**不关闭** ──
         // 退出只走返回手势（本组件没有标题栏关闭按钮）。
         // 【关键】隐藏时**整条 clickable 都不挂**，而不是 clickable(enabled = false)。
@@ -142,7 +144,13 @@ fun AppSheet(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                // 宿主已不再统一内缩 → 面板自己补导航栏 inset，内容位置与改动前完全一致
+                .then(
+                    if (panelMaxHeight != null) {
+                        Modifier.heightIn(max = panelMaxHeight)
+                    } else {
+                        Modifier
+                    },
+                )
                 .navigationBarsPadding()
                 .fillMaxWidth()
                 .graphicsLayer { translationY = slide * size.height }

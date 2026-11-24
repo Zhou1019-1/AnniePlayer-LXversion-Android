@@ -1,7 +1,9 @@
 package com.annieplayer.annie_music.kt.data.sources.home
 
 import com.annieplayer.annie_music.kt.data.model.HomeShelf
+import com.annieplayer.annie_music.kt.data.model.HomeTarget
 import com.annieplayer.annie_music.kt.data.model.MusicPlatform
+import com.annieplayer.annie_music.kt.data.model.Song
 
 // ================================================================================================
 // 流媒体主页：契约 + 注册表 + 各平台共用的搬运工具
@@ -74,16 +76,19 @@ internal const val HomeCachePrefix = "home:v3:"
 suspend fun fetchHomeShelves(
     platform: MusicPlatform,
     kugouDiscoverToken: Int = 0,
-): List<HomeShelf> = when (platform) {
-    MusicPlatform.netease -> fetchHomeNetease()
-    MusicPlatform.qq -> fetchHomeQQ()
-    MusicPlatform.kuwo -> fetchHomeKuwo()
-    MusicPlatform.kugou -> fetchHomeKugou(kugouDiscoverToken)
-    MusicPlatform.qobuz,
-    MusicPlatform.apple,
-    MusicPlatform.kkbox,
-    MusicPlatform.local,
-    -> emptyList()
+    force: Boolean = false,
+): List<HomeShelf> = withHomeCacheForce(force) {
+    when (platform) {
+        MusicPlatform.netease -> fetchHomeNetease()
+        MusicPlatform.qq -> fetchHomeQQ()
+        MusicPlatform.kuwo -> fetchHomeKuwo()
+        MusicPlatform.kugou -> fetchHomeKugou(kugouDiscoverToken)
+        MusicPlatform.qobuz,
+        MusicPlatform.apple,
+        MusicPlatform.kkbox,
+        MusicPlatform.local,
+        -> emptyList()
+    }
 }
 
 // ================================================================================================
@@ -133,3 +138,55 @@ private fun _trim1(value: Double): String {
     if (rounded >= 100.0) return rounded.toLong().toString()
     return if (rounded % 1.0 == 0.0) rounded.toLong().toString() else rounded.toString()
 }
+
+internal const val NewTabCachePrefix = "newtab:v1:"
+
+internal const val NewTabRoomCachePrefix = "newtabroom:v1:"
+
+internal const val NewTabTrackRows = 4
+
+enum class NewTabSectionKind {
+    Hero,
+    Tracks,
+    Cards,
+}
+
+data class NewTabItem(
+    val key: String,
+    val title: String,
+    val subtitle: String = "",
+    val eyebrow: String = "",
+    val cover: String = "",
+    val inset: String = "",
+    val atmos: Boolean = false,
+    val target: HomeTarget? = null,
+)
+
+data class NewTabSection(
+    val id: String,
+    val title: String,
+    val kind: NewTabSectionKind,
+    val expanded: Boolean = false,
+    val roomId: String = "",
+    val items: List<NewTabItem> = emptyList(),
+    val songs: List<Song> = emptyList(),
+)
+
+data class NewTabRoom(
+    val id: String,
+    val title: String,
+    val kind: NewTabSectionKind,
+    val items: List<NewTabItem> = emptyList(),
+    val songs: List<Song> = emptyList(),
+)
+
+suspend fun fetchHomeNewTab(platform: MusicPlatform): List<NewTabSection> = when (platform) {
+    MusicPlatform.apple -> fetchHomeNewTabApple()
+    else -> emptyList()
+}
+
+suspend fun fetchHomeNewTabRoom(platform: MusicPlatform, roomId: String): NewTabRoom? =
+    when (platform) {
+        MusicPlatform.apple -> fetchHomeNewTabRoomApple(roomId)
+        else -> null
+    }

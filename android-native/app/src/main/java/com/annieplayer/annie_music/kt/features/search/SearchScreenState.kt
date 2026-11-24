@@ -8,9 +8,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.annieplayer.annie_music.kt.core.state.AppRoute
 import com.annieplayer.annie_music.kt.core.state.DownloadViewModel
-import com.annieplayer.annie_music.kt.core.state.KkboxRoute
 import com.annieplayer.annie_music.kt.core.state.PlayerViewModel
-import com.annieplayer.annie_music.kt.core.state.QobuzRoute
 import com.annieplayer.annie_music.kt.core.state.SearchSelectionViewModel
 import com.annieplayer.annie_music.kt.data.model.Album
 import com.annieplayer.annie_music.kt.data.model.Artist
@@ -18,19 +16,13 @@ import com.annieplayer.annie_music.kt.data.model.MusicPlatform
 import com.annieplayer.annie_music.kt.data.model.Song
 import com.annieplayer.annie_music.kt.data.searchAlbumByPlatform
 import com.annieplayer.annie_music.kt.data.searchArtistByPlatform
+import com.annieplayer.annie_music.kt.data.searchSongsByPlatform
 import com.annieplayer.annie_music.kt.data.sources.apple.AppleStorefront
 import com.annieplayer.annie_music.kt.data.sources.apple.AppleMusicSettings
 import com.annieplayer.annie_music.kt.data.sources.apple.appleMusicStorefront
 import com.annieplayer.annie_music.kt.data.sources.apple.fetchAppleStorefronts
-import com.annieplayer.annie_music.kt.data.sources.apple.searchAppleMusic
 import com.annieplayer.annie_music.kt.data.sources.kkbox.parseKkboxUrl
-import com.annieplayer.annie_music.kt.data.sources.kkbox.searchKkboxSongs
 import com.annieplayer.annie_music.kt.data.sources.qobuz.parseQobuzUrl
-import com.annieplayer.annie_music.kt.data.sources.kugou.searchKugouMusic
-import com.annieplayer.annie_music.kt.data.sources.kuwo.searchMusic
-import com.annieplayer.annie_music.kt.data.sources.netease.searchNeteaseMusic
-import com.annieplayer.annie_music.kt.data.sources.qq.searchQQMusic
-import com.annieplayer.annie_music.kt.data.sources.qobuz.searchQobuzTracks
 import com.annieplayer.annie_music.kt.widgets.SongSearchColumn
 import com.annieplayer.annie_music.kt.widgets.ModeDropdownMode
 import kotlinx.coroutines.CancellationException
@@ -113,23 +105,15 @@ class SearchScreenState(
     var sourcePickerVisible by mutableStateOf(false)
     var saveDirPath by mutableStateOf<String?>(null)
 
-    // ── 搜索：单平台分发 ──
+    // ── 搜索：单平台分发（实现与「搜索元数据」共用一份，见 searchSongsByPlatform） ──
     suspend fun searchSongs(platform: MusicPlatform, query: String, page: Int): List<Song> =
-        when (platform) {
-            MusicPlatform.kuwo -> searchMusic(query, page = page)
-            MusicPlatform.netease -> searchNeteaseMusic(query, page = page, pageSize = kSearchPageSize)
-            MusicPlatform.qq -> searchQQMusic(query, page = page, pageSize = kSearchPageSize)
-            MusicPlatform.kugou -> searchKugouMusic(query, page = page, pageSize = kSearchPageSize)
-            MusicPlatform.qobuz -> searchQobuzTracks(
-                query,
-                limit = kSearchPageSize,
-                offset = (page - 1) * kSearchPageSize,
-            )
-            MusicPlatform.apple -> searchAppleMusic(query, page = page, limit = kAppleSearchPageSize)
-            MusicPlatform.kkbox -> searchKkboxSongs(query, page = page, limit = kSearchPageSize)
-            // 本地曲库不参与云端搜索（自己那一页自带筛选框）
-            MusicPlatform.local -> emptyList()
-        }
+        searchSongsByPlatform(
+            platform = platform,
+            query = query,
+            page = page,
+            pageSize = kSearchPageSize,
+            appleLimit = kAppleSearchPageSize,
+        )
 
     /** 按当前平台发起单曲搜索（单栏：只有一列） */
     fun startSongSearch(query: String) {
@@ -187,7 +171,7 @@ class SearchScreenState(
 
     /** 当前搜索是否使用 Apple Music（三种模式同一个平台，直接看平台即可）。 */
     val showAppleCountry: Boolean
-        get() = mode != ModeDropdownMode.qobuz && searchPlatform == MusicPlatform.apple
+        get() = searchPlatform == MusicPlatform.apple
 
     /** 切换 Apple Music 国家/地区；当前搜索重新按新地区请求。 */
     fun selectAppleCountry(code: String) {
@@ -271,7 +255,6 @@ class SearchScreenState(
                 artistSubmitted = query
                 startArtistSearch(query)
             }
-            ModeDropdownMode.qobuz -> Unit
         }
     }
 
@@ -300,7 +283,6 @@ class SearchScreenState(
                     startArtistSearch(artistSubmitted)
                 }
 
-            ModeDropdownMode.qobuz -> Unit
         }
     }
 
@@ -325,7 +307,6 @@ class SearchScreenState(
             ModeDropdownMode.song -> startSongSearch(songSubmitted)
             ModeDropdownMode.album -> startAlbumSearch(albumSubmitted)
             ModeDropdownMode.singer -> startArtistSearch(artistSubmitted)
-            ModeDropdownMode.qobuz -> Unit
         }
     }
 
@@ -341,25 +322,5 @@ class SearchScreenState(
     }
 
     // ── 链接解析 ──
-
-    fun handleQobuzSubmit(text: String) {
-        val parsed = parseQobuzUrl(text)
-        if (parsed == null) {
-            scope.launch { snackbarHostState.showSnackbar("未识别到有效 Qobuz 链接") }
-            return
-        }
-        // 对齐 Dart `context.push('/qobuz-detail?type=&id=')`：压入全局页面栈
-        onOpenRoute(QobuzRoute(parsed.type, parsed.id))
-    }
-
-    fun handleKkboxSubmit(text: String) {
-        val parsed = parseKkboxUrl(text)
-        if (parsed == null) {
-            scope.launch { snackbarHostState.showSnackbar("未识别到有效 KKBOX 链接") }
-            return
-        }
-        // 对齐 Dart `context.push('/kkbox-detail?type=&id=')`：压入全局页面栈
-        onOpenRoute(KkboxRoute(parsed.type, parsed.id))
-    }
 
 }

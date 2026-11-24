@@ -599,9 +599,9 @@ private fun KaraokeRowText(
                     val right = if (localSung >= text.length) {
                         width
                     } else {
-                        val x0 = l.getHorizontalPosition(i, true).toFloat()
+                        val x0 = l.getHorizontalPosition(i, true)
                         val x1 = if (i + 1 <= text.length) {
-                            l.getHorizontalPosition(i + 1, true).toFloat()
+                            l.getHorizontalPosition(i + 1, true)
                         } else {
                             x0
                         }

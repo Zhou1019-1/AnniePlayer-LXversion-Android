@@ -11,9 +11,11 @@ import com.annieplayer.annie_music.kt.core.state.TranslatePicker
 import com.annieplayer.annie_music.kt.core.state.UiViewModel
 import com.annieplayer.annie_music.kt.core.util.consumeCancelledSong
 import com.annieplayer.annie_music.kt.core.util.downloadQualityFor
+import com.annieplayer.annie_music.kt.core.audio.MediaPlayerBackend
 import com.annieplayer.annie_music.kt.core.util.enqueueDownload
 import com.annieplayer.annie_music.kt.data.DownloadService
 import com.annieplayer.annie_music.kt.data.enrichSong
+import com.annieplayer.annie_music.kt.data.fetchAlbumCopyright
 import com.annieplayer.annie_music.kt.data.fetchDownloadUrlBySong
 import com.annieplayer.annie_music.kt.data.model.MusicPlatform
 import com.annieplayer.annie_music.kt.data.model.Quality
@@ -116,6 +118,12 @@ suspend fun downloadOneAndRegister(
             else -> {
                 val url = fetchDownloadUrlBySong(song, quality)
                 val extra = enrichSong(song)
+                // 版权：之前只有 Qobuz（Song 自带）与 Apple（下载器单独补）会写，
+                // 国内四家一律空着。这里统一补一次（Apple = 专辑 copyright、国内 = 唱片公司），
+                // 与「导入元数据」走同一个函数 `fetchAlbumCopyright`。
+                val albumCopyright = song.copyright ?: runCatching {
+                    fetchAlbumCopyright(song.platform, song.albumId)
+                }.getOrNull()
                 DownloadService.downloadSong(
                     songId = song.id,
                     title = song.title,
@@ -135,7 +143,7 @@ suspend fun downloadOneAndRegister(
                     composer = meta.composer ?: song.composer ?: extra["composer"]?.toString(),
                     genre = meta.genre ?: song.genre ?: extra["genre"]?.toString(),
                     isrc = meta.isrc ?: song.isrc ?: extra["isrc"]?.toString(),
-                    copyright = song.copyright,
+                    copyright = albumCopyright,
                     version = song.version,
                     // 多歌手统一写成 `A / B`（结构化列表优先，见 TagMapper.artistOf）
                     artistNames = song.artistNames,
@@ -178,15 +186,30 @@ class DownloadOrchestrator(
     var downloadingId by mutableStateOf<String?>(null)
         private set
 
+    /** 当前并行执行中的下载任务数：宿主只在「从 0 变 1」时弹一次 Toast，避免连弹 */
+    var activeDownloads by mutableStateOf(0)
+        private set
+
     /** 批量音质面板是否可见（由宿主页面控制开关） */
     var batchPickerVisible by mutableStateOf(false)
+        private set
+
+    /**
+     * 批量面板正在处理的那批歌。
+     *
+     * 由 [openBatchPicker] 传进来而不是让面板自己去某个多选状态里读：搜索页的选中在
+     * `SearchSelectionViewModel`、歌手页在 `SingerDetailCache`，面板读不到第二份；
+     * 而「多选操作」抽屉关掉之后那份快照也没了。
+     */
+    var batchPickerSongs by mutableStateOf<List<Song>>(emptyList())
         private set
 
     /** 批量下载进行中（宿主据此把批量按钮置灰） */
     var batchDownloading by mutableStateOf(false)
         private set
 
-    fun openBatchPicker() {
+    fun openBatchPicker(songs: List<Song>) {
+        batchPickerSongs = songs
         batchPickerVisible = true
     }
 
@@ -260,6 +283,8 @@ class DownloadOrchestrator(
             downloadViewModel.addTask(song, quality)
             downloadingId = songId
             enqueueDownload(songId) {
+                MediaPlayerBackend.markDownloadTask(true)
+                activeDownloads += 1
                 try {
                     if (song.platform == MusicPlatform.apple) {
                         AppleDownloader.download(
@@ -282,6 +307,10 @@ class DownloadOrchestrator(
                     } else {
                         val url = fetchDownloadUrlBySong(song, quality)
                         val extra = enrichSong(song)
+                        // 版权同上：国内四家此前一律空着，这里统一补一次
+                        val albumCopyright = song.copyright ?: runCatching {
+                            fetchAlbumCopyright(song.platform, song.albumId)
+                        }.getOrNull()
                         DownloadService.downloadSong(
                             songId = songId,
                             title = song.title,
@@ -301,7 +330,7 @@ class DownloadOrchestrator(
                             composer = song.composer ?: extra["composer"]?.toString(),
                             genre = song.genre ?: extra["genre"]?.toString(),
                             isrc = song.isrc ?: extra["isrc"]?.toString(),
-                            copyright = song.copyright,
+                            copyright = albumCopyright,
                             version = song.version,
                             // 多歌手统一写成 `A / B`（结构化列表优先，见 TagMapper.artistOf）
                             artistNames = song.artistNames,
@@ -312,6 +341,9 @@ class DownloadOrchestrator(
                     playerViewModel.addToQueue(song)
                 } catch (_: Exception) {
                     downloadViewModel.failTask(songId)
+                } finally {
+                    MediaPlayerBackend.markDownloadTask(false)
+                    activeDownloads -= 1
                 }
                 downloadingId = null
             }
@@ -339,15 +371,22 @@ class DownloadOrchestrator(
         }
         val batchId = "search_batch_" + System.currentTimeMillis()
         enqueueDownload(batchId) {
-            for (song in songs) {
-                downloadViewModel.updateProgress(song.id, 0.0)
-                downloadOneAndRegister(
-                    downloadViewModel = downloadViewModel,
-                    playerViewModel = playerViewModel,
-                    song = song,
-                    quality = downloadQualityFor(song, quality),
-                    onProgress = { p -> downloadViewModel.updateProgress(song.id, p * 100) },
-                )
+            MediaPlayerBackend.markDownloadTask(true)
+            activeDownloads += 1
+            try {
+                for (song in songs) {
+                    downloadViewModel.updateProgress(song.id, 0.0)
+                    downloadOneAndRegister(
+                        downloadViewModel = downloadViewModel,
+                        playerViewModel = playerViewModel,
+                        song = song,
+                        quality = downloadQualityFor(song, quality),
+                        onProgress = { p -> downloadViewModel.updateProgress(song.id, p * 100) },
+                    )
+                }
+            } finally {
+                MediaPlayerBackend.markDownloadTask(false)
+                activeDownloads -= 1
             }
             onFinished()
             batchDownloading = false

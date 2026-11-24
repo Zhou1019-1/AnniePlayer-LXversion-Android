@@ -53,6 +53,27 @@ constexpr int kMaxFramesPerConvert = 16384;
 constexpr int kPackOff = 0;      /** 裸交错（L0 R0 L1 R1…），不分装 */
 constexpr int kPackDop = 1;      /** DoP：4 字节 → 6 字节，帧标记 0x05/0xFA 交替 */
 constexpr int kPackNative = 2;   /** Native DSD：8 字节 → 2 个 32-bit word */
+/**
+ * Native DSD 的 **16 bit 容器**（`0x1A000001`，每声道 2 字节，一帧 4 字节）。
+ *
+ * 输入交错 `L0 R0 L1 R1` → 输出 `L0 L1 R0 R1`（每声道两个连续字节成一片）。
+ * 为什么要单独一种：`kPackNative` 产出 8 字节帧 `[L0..L3][R0..R3]`；16 bit 容器下
+ * 设备一帧只吃 4 字节，同一串字节会被解释成"L=L0L1, R=L2L3" —— 两个声道都拿到左声道，
+ * 听感是串音 + 底噪抬高（不是纯噪声）。
+ */
+constexpr int kPackNative16 = 3;
+
+/**
+ * 飞傲 `DSD660` 帧内布局（32 bit 容器，8 字节一帧）。
+ *
+ * 输入交错 `L0 R0 L1 R1 L2 R2 L3 R3` → 输出 `L1 L0 R1 R0 L3 L2 R3 R2`，
+ * 即 `out = [in2,in0,in3,in1,in6,in4,in7,in5]`（1:1，不扩容器）。
+ *
+ * 依据：`libhello-jni.so` 的 `DsdConvertM7`(0x1911c8) 两个子模式产出同一布局，
+ * 且 `libfiioaudio.so` 对 `0x1A000002` 判 `mode 7 = BYPASS`（不再重排）——
+ * 所以这一步必须由我方完成，不能指望 HAL。
+ */
+constexpr int kPackDsd660 = 4;
 
 // ── 动态符号表 ──
 using PFN_open_input = int (*)(AVFormatContext **, const char *, const AVInputFormat *, AVDictionary **);
@@ -240,6 +261,9 @@ struct DemuxState {
     int64_t rawPtsUs = 0;
     /** 1 bit 采样率；用于按已输出字节数推进 pts（每字节 = 8 个 1-bit 采样） */
     int rawBitRate = 0;
+
+    /** 诊断：最近一次 `read_frame` 的返回值（区分"真 EOF"与"这一轮没数据"） */
+    int lastReadRet = 0;
     /**
      * 源数据是否 **LSB-first**（DSF），输出前要逐字节位反转。
      *
@@ -324,6 +348,7 @@ void fillRawInterleaved(DemuxState *state, int maxBytes) {
         // 攒齐一对（L + R）block
         while ((state->rawLeft.empty() || state->rawRight.empty()) && !state->eof) {
             const int ret = g_api.read_frame(state->fmt, state->packet);
+            state->lastReadRet = ret;
             if (ret == AVERROR_EOF) {
                 state->eof = true;
                 break;
@@ -730,9 +755,19 @@ Java_com_annieplayer_annie_1music_kt_core_audio_ffmpeg_NativeFfmpegDemux_openRaw
         values[3] = static_cast<jint>(state->durationUs / 1000);
         env->SetIntArrayRegion(info, 0, 4, values);
     }
+    // `[4]` = 文件自身的位序（可空：老调用方传 IntArray(4) 就不回填）。
+    // 上层现在总是用 `configRawPackEx` 下定位序，所以必须知道"不覆盖时该用什么"，
+    // 而这个答案只有解封装这一侧有（`codec_id`：DSF = LSB-first）。
+    if (info != nullptr && env->GetArrayLength(info) >= 5) {
+        jint rev = state->rawBitReverse ? 1 : 0;
+        env->SetIntArrayRegion(info, 4, 1, &rev);
+    }
 
-    LOGI("openRaw bitRate=%d ch=%d rev=%d durMs=%lld file=%s",
+    // `blk` / `fsz` 是"packet 边界是否按块对齐"的唯一离线判据：planar 拆声道按
+    // `size / channels` 切，只有 packet 恒为整块时 `size/channels` 才等于每声道整块数。
+    LOGI("openRaw bitRate=%d ch=%d rev=%d blk=%d fsz=%d durMs=%lld file=%s",
          bitRate, channels, state->rawBitReverse ? 1 : 0,
+         stream->codecpar->block_align, stream->codecpar->frame_size,
          static_cast<long long>(state->durationUs / 1000), filePath.c_str());
     return reinterpret_cast<jlong>(state);
 }
@@ -758,12 +793,34 @@ Java_com_annieplayer_annie_1music_kt_core_audio_ffmpeg_NativeFfmpegDemux_configR
     auto *state = reinterpret_cast<DemuxState *>(handle);
     if (state == nullptr) return;
     std::lock_guard<std::mutex> guard(state->lock);
-    state->packMode = mode == kPackDop ? kPackDop : (mode == kPackNative ? kPackNative : kPackOff);
+    state->packMode = mode == kPackDop ? kPackDop : (mode == kPackNative ? kPackNative : (mode == kPackNative16 ? kPackNative16 : (mode == kPackDsd660 ? kPackDsd660 : kPackOff)));
     state->packBigEndian = bigEndian == JNI_TRUE;
     // 换模式等于换线格式：相位与尾巴都必须从零开始，否则第一帧标记可能与上一段错相
     state->dopMarkerHigh = false;
     state->packCarry.clear();
     LOGI("configRawPack mode=%d be=%d", state->packMode, state->packBigEndian ? 1 : 0);
+}
+
+JNIEXPORT void JNICALL
+Java_com_annieplayer_annie_1music_kt_core_audio_ffmpeg_NativeFfmpegDemux_configRawPackEx(
+    JNIEnv *,
+    jobject,
+    jlong handle,
+    jint mode,
+    jboolean bigEndian,
+    jboolean bitReverse
+) {
+    auto *state = reinterpret_cast<DemuxState *>(handle);
+    if (state == nullptr) return;
+    std::lock_guard<std::mutex> guard(state->lock);
+    state->packMode = mode == kPackDop ? kPackDop : (mode == kPackNative ? kPackNative : (mode == kPackNative16 ? kPackNative16 : (mode == kPackDsd660 ? kPackDsd660 : kPackOff)));
+    state->packBigEndian = bigEndian == JNI_TRUE;
+    // 位序由容器决定，不能只信 codec_id（见 Kotlin 侧 `configRawPackEx` 的说明）
+    state->rawBitReverse = bitReverse == JNI_TRUE;
+    state->dopMarkerHigh = false;
+    state->packCarry.clear();
+    LOGI("configRawPackEx mode=%d be=%d rev=%d",
+         state->packMode, state->packBigEndian ? 1 : 0, state->rawBitReverse ? 1 : 0);
 }
 
 /**
@@ -795,10 +852,13 @@ Java_com_annieplayer_annie_1music_kt_core_audio_ffmpeg_NativeFfmpegDemux_read(
     // 帧长算时长与位置，进度条与 seek 全部跟着错。
     if (state->rawDsd) {
         const bool nativePack = state->packMode == kPackNative;
+        const bool native16Pack = state->packMode == kPackNative16;
+        const bool dsd660Pack = state->packMode == kPackDsd660;
         const bool dopPack = state->packMode == kPackDop;
-        // 一个封装单元吃多少交错字节、产出多少字节（未封装时恒等）
-        const size_t unitIn = nativePack ? 8 : 4;
-        const size_t unitOut = nativePack ? 8 : (dopPack ? 6 : 4);
+        // 一个封装单元吃多少交错字节、产出多少字节（未封装时恒等）。
+        // 16 bit 容器与裸交错**粒度相同**（4 入 4 出），只是要重排字节顺序（见 `kPackNative16`）。
+        const size_t unitIn = (nativePack || dsd660Pack) ? 8 : 4;
+        const size_t unitOut = (nativePack || dsd660Pack) ? 8 : (dopPack ? 6 : 4);
         const size_t units = static_cast<size_t>(capacity) / unitOut;
         const size_t maxIn = units * unitIn;
         if (maxIn == 0) return 0;
@@ -813,6 +873,14 @@ Java_com_annieplayer_annie_1music_kt_core_audio_ffmpeg_NativeFfmpegDemux_read(
         fillRawInterleaved(state, static_cast<int>(maxIn));
         if (state->pcm.size() < unitIn) {
             state->packCarry.assign(state->pcm.begin(), state->pcm.end());
+            // 诊断：这一句是"源侧假 EOS"的唯一现场。Kotlin 侧把 0 当 `RESULT_END_OF_INPUT`
+            // （此后 Media3 永不供数），所以这里必须能区分"真 EOF"与"这一轮凑不满一个单元"。
+            __android_log_print(
+                ANDROID_LOG_INFO, "annie-dap",
+                "readRaw→0 eof=%d carry=%zu pcm=%zu unitIn=%zu lastReadRet=%d bitRate=%d",
+                state->eof ? 1 : 0, state->packCarry.size(), state->pcm.size(), unitIn,
+                state->lastReadRet, state->rawBitRate
+            );
             return 0;
         }
         const size_t usable = state->pcm.size() - state->pcm.size() % unitIn;
@@ -823,6 +891,27 @@ Java_com_annieplayer_annie_1music_kt_core_audio_ffmpeg_NativeFfmpegDemux_read(
         state->packed.resize(outBytes);
         if (nativePack) {
             packNativeWords(state, state->pcm.data(), usable, state->packed.data());
+        } else if (dsd660Pack) {
+            // `[in2,in0,in3,in1,in6,in4,in7,in5]`：16 bit 单位左右交替，组内两字节互换
+            for (size_t i = 0, o = 0; i + 8 <= usable; i += 8, o += 8) {
+                const uint8_t *p = state->pcm.data() + i;
+                state->packed[o + 0] = p[2];
+                state->packed[o + 1] = p[0];
+                state->packed[o + 2] = p[3];
+                state->packed[o + 3] = p[1];
+                state->packed[o + 4] = p[6];
+                state->packed[o + 5] = p[4];
+                state->packed[o + 6] = p[7];
+                state->packed[o + 7] = p[5];
+            }
+        } else if (native16Pack) {
+            // 16 bit 容器：`L0 R0 L1 R1` → `L0 L1 R0 R1`（每声道两个连续字节成一片）
+            for (size_t i = 0, o = 0; i + 4 <= usable; i += 4, o += 4) {
+                state->packed[o + 0] = state->pcm[i + 0];
+                state->packed[o + 1] = state->pcm[i + 2];
+                state->packed[o + 2] = state->pcm[i + 1];
+                state->packed[o + 3] = state->pcm[i + 3];
+            }
         } else if (dopPack) {
             packDop(state, state->pcm.data(), usable, state->packed.data());
         } else {
@@ -971,6 +1060,10 @@ Java_com_annieplayer_annie_1music_kt_core_audio_ffmpeg_NativeFfmpegDemux_seek(
     state->pending.clear();
     state->rawLeft.clear();
     state->rawRight.clear();
+    // 封装侧的尾巴与标记相位同样属于旧位置：carry 里可能是旧位置的 4/8 字节残块，
+    // 接到新位置后面会让左右映射整体错位（听感 = 噪声，且完全看不出原因）
+    state->packCarry.clear();
+    state->dopMarkerHigh = false;
     state->rawPtsUs = target;
     state->eof = false;
     state->lastPtsUs = target;

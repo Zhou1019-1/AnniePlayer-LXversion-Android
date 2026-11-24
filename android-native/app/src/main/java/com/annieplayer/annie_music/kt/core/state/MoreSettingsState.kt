@@ -11,12 +11,14 @@ import com.annieplayer.annie_music.kt.core.audio.DsdOutputMode
 import com.annieplayer.annie_music.kt.core.audio.FilterType
 import com.annieplayer.annie_music.kt.core.audio.GraphicEqPreset
 import com.annieplayer.annie_music.kt.core.audio.MsebValues
-import com.annieplayer.annie_music.kt.core.audio.OutputPath
+import com.annieplayer.annie_music.kt.core.audio.SinkKind
 import com.annieplayer.annie_music.kt.core.audio.PeqBand
 import com.annieplayer.annie_music.kt.core.audio.TuningEngine
 import com.annieplayer.annie_music.kt.core.audio.defaultPeqBands
 import com.annieplayer.annie_music.kt.core.audio.OutputToggles
+import com.annieplayer.annie_music.kt.core.audio.PlaybackPolicy
 import com.annieplayer.annie_music.kt.core.audio.migrateLegacySettings
+import com.annieplayer.annie_music.kt.core.audio.dap.NativeDapDac
 import com.annieplayer.annie_music.kt.data.model.MusicPlatform
 import com.annieplayer.annie_music.kt.data.model.Quality
 import kotlinx.coroutines.CompletableDeferred
@@ -38,6 +40,7 @@ object MoreSettings {
     private const val KEY_SAVE_LRC_FILE = "save-lrc-file"
     private const val KEY_AUDIO_MODE = "audio-output-mode"
     private const val KEY_OUTPUT_PATH = "audio-output-path"
+    private const val KEY_AAUDIO_EXCLUSIVE = "audio-aaudio-exclusive"
     /**
      * 「直通解码」那个开关的历史键（`audio-toggle-offload`）。
      *
@@ -85,6 +88,9 @@ object MoreSettings {
     /** DSD → PCM 目标率，**每个 DSD 档位一个键**（`audio-dsd-pcm-rate-dsd64` 等） */
     private const val KEY_DSD_PCM_RATE_PREFIX = "audio-dsd-pcm-rate-"
 
+    /** 这台设备上 `~AudioTrack()` 收不了尾（自旋占核），直出已停用；见 `NativeDapDac` */
+    private const val KEY_DAP_TEARDOWN_STUCK = "audio-dap-teardown-stuck"
+
     private var _prefs: SharedPreferences? = null
 
     private val _writeQobuzDownloadTranslation = MutableStateFlow(false)
@@ -115,9 +121,24 @@ object MoreSettings {
      * 再猜它能推出什么；现在反过来 —— 选通路，开关是通路的属性，
      * "要不要调音"由 [tuningEnabled] 派生（见 `OutputMatrix.kt`）。
      */
-    private val _outputPath = MutableStateFlow(OutputPath.systemMix)
+    private val _usbExclusive = MutableStateFlow(false)
 
-    val outputPath: StateFlow<OutputPath> = _outputPath.asStateFlow()
+    val usbExclusiveFlow: StateFlow<Boolean> = _usbExclusive.asStateFlow()
+
+    val usbExclusive: Boolean get() = _usbExclusive.value
+
+    private val _aaudioExclusive = MutableStateFlow(false)
+
+    val aaudioExclusiveFlow: StateFlow<Boolean> = _aaudioExclusive.asStateFlow()
+
+    val aaudioExclusive: Boolean get() = _aaudioExclusive.value
+
+    fun playbackPolicy(): PlaybackPolicy = PlaybackPolicy(
+        usbExclusive = _usbExclusive.value,
+        aaudioExclusive = _aaudioExclusive.value,
+        toggles = _outputToggles.value,
+        tuningEngine = _tuningEngine.value,
+    )
 
     /**
      * 通路下方的开关（直通 / 按源采样率 / Bit Perfect）。
@@ -149,16 +170,15 @@ object MoreSettings {
      */
     fun tuningEnabledNow(
         bluetooth: Boolean = false,
-        pathOverride: com.annieplayer.annie_music.kt.core.audio.OutputPath? = null,
+        exclusiveSinkOverride: Boolean? = null,
         rawDsd: Boolean = false,
-    ): Boolean =
-        com.annieplayer.annie_music.kt.core.audio.tuningEnabled(
-            pathOverride ?: _outputPath.value,
-            _outputToggles.value,
-            bluetooth,
-            _tuningEngine.value,
-            rawDsd,
-        )
+    ): Boolean = com.annieplayer.annie_music.kt.core.audio.tuningEnabled(
+        exclusiveSinkOverride ?: usbExclusive,
+        _outputToggles.value,
+        bluetooth,
+        _tuningEngine.value,
+        rawDsd,
+    )
 
     private val _tuningEngine = MutableStateFlow(TuningEngine.graphic)
 
@@ -290,7 +310,7 @@ object MoreSettings {
         when {
             // ① 已经用新键存过：直接读，**绝不重算**
             togglesSaved -> {
-                _outputPath.value = OutputPath.fromKey(prefs?.getString(KEY_OUTPUT_PATH, null))
+                _usbExclusive.value = prefs?.getString(KEY_OUTPUT_PATH, null) == "usb-direct"
                 _outputToggles.value = OutputToggles(
                     followSourceRate = prefs?.getBoolean(KEY_TOGGLE_FOLLOW_SOURCE, false) ?: false,
                     bitPerfect = prefs?.getBoolean(KEY_TOGGLE_BIT_PERFECT, true) ?: true,
@@ -298,19 +318,24 @@ object MoreSettings {
             }
             // ② 老版本升级：没有新键但可能存了老输出通路 → 迁移一次并落盘
             prefs?.contains(KEY_OUTPUT_PATH) == true -> {
-                val (path, toggles) = migrateLegacySettings(
+                val (usb, toggles) = migrateLegacySettings(
                     legacyModeKey = prefs.getString(KEY_AUDIO_MODE, null),
                     legacyPathKey = prefs.getString(KEY_OUTPUT_PATH, null),
                 )
-                _outputPath.value = path
+                _usbExclusive.value = usb
                 _outputToggles.value = toggles
                 persistMatrix()
             }
             // ③ 全新安装：默认「系统通路 + 默认开关」，与历史默认一致
             else -> {
-                _outputPath.value = OutputPath.systemMix
+                _usbExclusive.value = false
                 _outputToggles.value = OutputToggles()
             }
+        }
+        _aaudioExclusive.value = _prefs?.getBoolean(KEY_AAUDIO_EXCLUSIVE, false) ?: false
+        NativeDapDac.teardownStuck = _prefs?.getBoolean(KEY_DAP_TEARDOWN_STUCK, false) ?: false
+        NativeDapDac.onTeardownStuck = {
+            _prefs?.edit()?.putBoolean(KEY_DAP_TEARDOWN_STUCK, true)?.apply()
         }
         // DSD：模式 + 每个档位各自的目标率。脏值一律落回默认（PCM / 176.4k），不让设置把播放搞哑。
         // 档位值允许 `DSD_RATE_FOLLOW_SYSTEM`（0 = 跟随系统），所以校验要单独放它一马。
@@ -333,13 +358,13 @@ object MoreSettings {
             val legacyForceNative = _prefs?.getBoolean(KEY_FORCE_NATIVE_RATE, false) ?: false
             val needMigrate = legacyForceNative && !_outputToggles.value.let { toggles ->
                 com.annieplayer.annie_music.kt.core.audio.tuningEnabled(
-                    _outputPath.value,
+                    _usbExclusive.value,
                     toggles,
                     engine = _tuningEngine.value,
                 )
             }
             if (needMigrate) {
-                _outputPath.value = OutputPath.systemMix
+                _usbExclusive.value = false
                 _outputToggles.value = _outputToggles.value.copy(followSourceRate = false)
                 persistMatrix()
             }
@@ -384,8 +409,8 @@ object MoreSettings {
      * 通路变了**不动开关** —— 开关表达的是"我想这样"，不是"这台设备能做到"。
      * 换设备后用户不用重新设置，这一条是整套模型的前提。
      */
-    fun setOutputPath(path: OutputPath) {
-        _outputPath.value = path
+    fun setUsbExclusive(on: Boolean) {
+        _usbExclusive.value = on
         persistMatrix()
     }
 
@@ -395,11 +420,30 @@ object MoreSettings {
         persistMatrix()
     }
 
+    fun setAaudioExclusive(on: Boolean) {
+        _aaudioExclusive.value = on
+        _prefs?.edit()?.putBoolean(KEY_AAUDIO_EXCLUSIVE, on)?.apply()
+    }
+
+    /**
+     * 重新允许内置 DAC 直出。
+     *
+     * 只清标记、不动开关：直出本身没有用户级开关，它在"这台设备能收尾"时自动启用。
+     * 用户换了 ROM / 系统升级后想再试一次，调这个方法即可（进程内立即生效）。
+     */
+    fun setDapTeardownStuck(stuck: Boolean) {
+        NativeDapDac.teardownStuck = stuck
+        _prefs?.edit()?.putBoolean(KEY_DAP_TEARDOWN_STUCK, stuck)?.apply()
+    }
+
     /** 落盘：通路 + 两个开关。老键（`KEY_AUDIO_MODE`）不再写，留给迁移读一次。 */
     private fun persistMatrix() {
         val t = _outputToggles.value
         _prefs?.edit()?.let { editor ->
-            editor.putString(KEY_OUTPUT_PATH, _outputPath.value.key)
+            editor.putString(
+                KEY_OUTPUT_PATH,
+                if (_usbExclusive.value) "usb-direct" else "system-mix",
+            )
             editor.putBoolean(KEY_TOGGLE_FOLLOW_SOURCE, t.followSourceRate)
             editor.putBoolean(KEY_TOGGLE_BIT_PERFECT, t.bitPerfect)
             editor.apply()

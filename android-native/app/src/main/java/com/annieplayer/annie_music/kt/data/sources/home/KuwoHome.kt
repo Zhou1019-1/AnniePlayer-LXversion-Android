@@ -9,6 +9,7 @@ import com.annieplayer.annie_music.kt.data.network.cacheService
 import com.annieplayer.annie_music.kt.data.network.httpGetJson
 import com.annieplayer.annie_music.kt.data.network.httpGetText
 import com.annieplayer.annie_music.kt.data.sources.common.decodeHtmlEntities
+import com.annieplayer.annie_music.kt.data.sources.kuwo.kuwoCoverAtSize
 
 // ================================================================================================
 // 酷我主页（契约与调度见 HomeFeedApi.kt；feed 的解析在 KuwoHotPage.kt）
@@ -29,12 +30,29 @@ import com.annieplayer.annie_music.kt.data.sources.common.decodeHtmlEntities
  * `KuwoHotPage.kt`（纯函数，有单测）。
  */
 internal suspend fun fetchHomeKuwo(): List<HomeShelf> {
-    val tuijian = cachedKuwoFeed(kuwoTuijianUrl, "tuijian")?.let { kuwoShelvesOf(it) }.orEmpty()
-    val hotPage = cachedKuwoFeed(kuwoHotPageUrl, "hotpage")?.let { kuwoShelvesOf(it) }.orEmpty()
+    val tuijianXml = cachedKuwoFeed(kuwoTuijianUrl, "tuijian")
+    val hotXml = cachedKuwoFeed(kuwoHotPageUrl, "hotpage")
+    val tuijian = tuijianXml?.let { kuwoShelvesOf(it) }.orEmpty()
+    val hotPage = hotXml?.let { kuwoShelvesOf(it) }.orEmpty()
     val merged = runCatching { mergeKuwoShelves(tuijian, hotPage) }
         .getOrDefault(if (tuijian.isNotEmpty()) tuijian else hotPage)
-    if (merged.isNotEmpty()) return withKuwoEditorPicks(merged)
+    if (merged.isNotEmpty()) return withKuwoEditorPicks(merged, kuwoHasEditorSongs(hotXml))
     return fetchHomeKuwoWeb()
+}
+
+/**
+ * 服务端这次到底投没投编辑精选。
+ *
+ * 判据必须落在**原始 section** 上：`banner` 和编辑精选会被 [mergeKuwoShelves] 一起并进
+ * `kuwo:hero`，从完成后的 shelves 里分不出某张卡是广告位还是编辑选的 —— 只要有 banner 投放
+ * 就会被判成「编辑精选已有」。而 banner 几乎天天有。
+ */
+internal fun kuwoHasEditorSongs(xml: String?): Boolean {
+    if (xml.isNullOrEmpty()) return false
+    val sections = runCatching { parseKuwoHotPage(xml) }.getOrDefault(emptyList())
+    return sections.any { section ->
+        section.type in KwEditorSectionTypes && section.items.any { it.tag == "songlist" }
+    }
 }
 
 /** 「精选歌单」区块的 id；热门流给了就不补，没给才用 web 的编辑推荐顶一行。 */
@@ -51,22 +69,27 @@ private const val KW_EDITOR_SHELF_ID = "kuwo:editor"
  * 补出来的卡是方图（`HomeCardStyle.Playlist`），不进大图轮播 —— web 接口给的是 500 方图，
  * 塞进 16:9 的 Hero 位会左右留黑边。
  */
-private suspend fun withKuwoEditorPicks(shelves: List<HomeShelf>): List<HomeShelf> {
-    if (shelves.any { it.id == KW_HERO_SHELF_ID }) return shelves
+private suspend fun withKuwoEditorPicks(
+    shelves: List<HomeShelf>,
+    serverHasEditor: Boolean,
+): List<HomeShelf> {
+    if (serverHasEditor) return shelves
+    if (shelves.any { it.id == KW_EDITOR_SHELF_ID }) return shelves
     val items = runCatching { kuwoWebPlaylistItems("editor") }.getOrDefault(emptyList())
     if (items.isEmpty()) return shelves
     val used = shelves.filterIsInstance<HomeShelf.Cards>()
         .flatMapTo(HashSet()) { shelf -> shelf.items.map { it.key } }
     val fresh = items.filter { used.add(it.key) }
     if (fresh.isEmpty()) return shelves
-    return listOf(
-        HomeShelf.Cards(
-            id = KW_EDITOR_SHELF_ID,
-            title = "编辑精选",
-            subtitle = "酷我编辑推荐",
-            items = fresh.take(HomePlaylistsMax),
-        ),
-    ) + shelves
+    val editorShelf = HomeShelf.Cards(
+        id = KW_EDITOR_SHELF_ID,
+        title = "编辑精选",
+        subtitle = "酷我编辑推荐",
+        items = fresh.take(HomePlaylistsMax),
+    )
+    val heroIndex = shelves.indexOfFirst { it.id == KW_HERO_SHELF_ID }
+    val insertAt = if (heroIndex >= 0) heroIndex + 1 else 0
+    return shelves.toMutableList().apply { add(insertAt, editorShelf) }
 }
 
 /** 解析失败（服务端改结构 / 半截响应）一律当「没有内容」，交给下一级数据源。 */
@@ -76,7 +99,9 @@ private fun kuwoShelvesOf(xml: String): List<HomeShelf> =
 /** 主页 feed 原始 XML（缓存整份文本：映射逻辑改动后旧缓存仍然可用）。 */
 private suspend fun cachedKuwoFeed(url: String, keySuffix: String): String? {
     val key = HomeCachePrefix + "kuwo:" + keySuffix
-    cacheService.get<String>(key)?.takeIf { it.isNotEmpty() }?.let { return it }
+    if (!homeCacheForceActive()) {
+        cacheService.get<String>(key)?.takeIf { it.isNotEmpty() }?.let { return it }
+    }
     val fresh = runCatching { httpGetText(url) }.getOrNull() ?: return null
     // 服务端偶尔回一个只有「推荐页结束标记」的短流，那种不缓存也不当数据用
     if (fresh.length < 1024) return null
@@ -124,7 +149,8 @@ private suspend fun fetchHomeKuwoWeb(): List<HomeShelf> {
  */
 private suspend fun kuwoWebPlaylistItems(keySuffix: String): List<HomeItem> {
     val key = HomeCachePrefix + "kuwo:" + keySuffix
-    val resp = cacheService.get<Map<String, Any?>>(key) ?: run {
+    val cached = if (homeCacheForceActive()) null else cacheService.get<Map<String, Any?>>(key)
+    val resp = cached ?: run {
         val fresh = runCatching {
             httpGetJson(
                 "https://www.kuwo.cn/api/www/rcm/index/playlist" +
@@ -144,7 +170,9 @@ private suspend fun kuwoWebPlaylistItems(keySuffix: String): List<HomeItem> {
         val name = decodeHtmlEntities(jsonStr(m["name"]))
         if (id.isEmpty() || name.isEmpty()) return@mapNotNull null
         // 酷我封面 500/700 都有，这里统一取 500（与其它平台一个档）
-        val cover = jsonStr(m["img500"]).ifEmpty { jsonStr(m["img"]) }
+        val cover = kuwoCoverAtSize(
+            jsonStr(m["img700"]).ifEmpty { jsonStr(m["img500"]) }.ifEmpty { jsonStr(m["img"]) },
+        )
         val total = jsonLong(m["total"])
         val listen = jsonLong(m["listencnt"])
         HomeItem(

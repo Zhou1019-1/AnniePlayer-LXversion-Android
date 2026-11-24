@@ -14,15 +14,11 @@ set_target_properties(temari PROPERTIES
 # 结构体布局在 major 内冻结 → 二进制兼容）。include/libavformat 下只放 4 个公共头。
 #
 # native-r8b-resampler.cpp：重采样（r8brain-free-src，MIT，header-only，见 thirdparty/r8brain）。
-#
-# native-aaudio-probe.cpp：AAudio 独占能力探测（开流→读 sharingMode→立刻关闭）。
-# 只为"Bit Perfect 那一级能不能用 AAudio 实现"提供实测证据，不参与播放。
 add_library(anniedsp SHARED
         native-dsp.cpp
         native-r8b-resampler.cpp
         native-ffmpeg-decoder.cpp
-        native-ffmpeg-demux.cpp
-        native-aaudio-probe.cpp)
+        native-ffmpeg-demux.cpp)
 
 target_include_directories(anniedsp PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/ffmpeg/include
@@ -45,10 +41,6 @@ target_compile_options(anniedsp PRIVATE
 
 find_library(log-lib log)
 find_library(dl-lib dl)
-# 注意：**不**在这里 `find_library(aaudio)`。本项目 minSdk = 24，而 libaaudio 只在
-# API ≥ 26 的 sysroot 里存在 → 直接链接会在 configure 阶段报 NOTFOUND，且会写成
-# `DT_NEEDED` 让 API 24/25 上连 libanniedsp.so 都加载不了。探测改用 dlopen
-# （见 native-aaudio-probe.cpp），老机器只是"这一项不可用"。
 target_link_libraries(anniedsp ${log-lib} ${dl-lib})
 
 # Temari 单独一个 JNI 库，避免 libtemari 加载失败时连带 anniedsp（调音/ffmpeg）。
@@ -115,3 +107,13 @@ add_library(annieuac SHARED native-uac.cpp)
 target_include_directories(annieuac PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/thirdparty/libusb)
 target_compile_options(annieuac PRIVATE -O3 -Wall)
 target_link_libraries(annieuac libusb ${log-lib} ${dl-lib})
+
+# DAP 内置 DAC 直通。又单独一个库，理由与 annieuac 一致：
+# 它调的是**非公开 ABI**（`libaudioclient.so` 的 C++ `AudioTrack`），符号面随 ROM 变；
+# 加载失败只该意味着"这条路不可用"，不能连带把调音/软解拖下水。
+#
+# 不链 libaudioclient：那会写进 DT_NEEDED，而 NDK 里也没有对应 stub。全部走
+# `dl_iterate_phdr` + 解析 `.dynsym`（见文件头）。
+add_library(anniedap SHARED native-dap-dsd.cpp)
+target_compile_options(anniedap PRIVATE -O3 -fno-exceptions -fno-rtti -Wall)
+target_link_libraries(anniedap ${log-lib} ${dl-lib})

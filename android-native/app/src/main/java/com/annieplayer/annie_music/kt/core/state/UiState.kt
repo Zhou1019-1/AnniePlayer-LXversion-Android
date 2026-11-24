@@ -1,7 +1,10 @@
 package com.annieplayer.annie_music.kt.core.state
 
+import androidx.compose.ui.graphics.Color
 import androidx.lifecycle.ViewModel
 import com.annieplayer.annie_music.kt.core.routing.OverlayVisibilityFlags
+import com.annieplayer.annie_music.kt.data.favorites.PlaylistScope
+import com.annieplayer.annie_music.kt.data.local.TagEditForm
 import com.annieplayer.annie_music.kt.data.model.MusicPlatform
 import com.annieplayer.annie_music.kt.data.model.Song
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -55,6 +58,15 @@ data class PlaylistDetailData(
     val platform: String,
     val name: String? = null,
     val cover: String? = null,
+    /** 榜单复用歌单面板时置 true：id 是榜单 id，不是歌单 id，不能回跳歌单 */
+    val isRank: Boolean = false,
+)
+
+data class PlaylistDetailPreload(
+    val name: String,
+    val creator: String = "",
+    val cover: String = "",
+    val songs: List<com.annieplayer.annie_music.kt.data.model.Song>,
 )
 
 /**
@@ -71,8 +83,23 @@ enum class RouteKind {
     /** 主页区块的「全部」子页（歌单 / 专辑卡片的完整列表） */
     HomeShelf,
 
+    /** Qobuz 发现页区块的「全部」子页 */
+    QobuzSeeAll,
+
+    /** Qobuz「Playlists by Category」分类下的歌单列表页 */
+    QobuzTag,
+
     /** 酷狗「按风格听」的流派二级页 */
     KugouStyle,
+
+    /** 榜单详情页 */
+    RankDetail,
+
+    /** Apple「新发现」区块的「全部」页（room） */
+    NewTabRoom,
+
+    /** Apple「排行榜」区块的「查看全部」页（room） */
+    AppleRankRoom,
 
     /** 本地曲库：一级列表页（艺术家 / 专辑 / 文件夹 / 最近添加） */
     LocalSection,
@@ -104,11 +131,20 @@ enum class RouteKind {
     /** 本地曲库：文件夹内容 */
     LocalFolder,
 
-    /** Qobuz 全屏详情页（链接解析进入） */
-    Qobuz,
+    /** 本地曲库：单曲「编辑元数据」页（从歌曲详情面板底部进入） */
+    LocalTrackEdit,
 
-    /** KKBOX 全屏详情页（链接解析进入） */
-    Kkbox,
+    /** 本地曲库：单曲「搜索元数据」页（从编辑页顶栏的搜索图标进入） */
+    LocalMetadataSearch,
+
+    /** 本地曲库：导入元数据页（从搜索结果点进来；压栈，与编辑页/搜索页同一条栈） */
+    LocalTagImport,
+
+    /** 本地曲库：单曲「搜索歌词」页（从编辑页顶栏的「词」按钮进入） */
+    LocalLyricSearch,
+
+    /** 本地曲库：歌词对比导入页（从歌词搜索结果点进来） */
+    LocalLyricImport,
 }
 
 /**
@@ -168,12 +204,12 @@ class SingerSongsRoute(val data: SingerDetailData) : AppRoute {
 /**
  * 歌手的「全部专辑」页。
  *
- * [section] 只在 Apple 上非空：它有「单曲 / EP」与「专辑」两段，overview 的两个「全部 ›」
- * 各进一段；其它平台传 null（一张列表，内部按发行时间 / 名称排序）。
+ * [section] 是「全部」页要看的那一段：单曲 / EP 或专辑。Apple 由接口自报分组，
+ * 其它平台按曲目数推断；为 null 时两段依次全显示。
  */
 class SingerAlbumsRoute(
     val data: SingerDetailData,
-    val section: AppleReleaseSection? = null,
+    val section: AlbumGroup? = null,
 ) : AppRoute {
     override val kind: RouteKind = RouteKind.SingerAlbums
     override val key: String = "singerAlbums:${routeSeq.incrementAndGet()}"
@@ -192,6 +228,13 @@ data class HomeShelfAllData(
     val items: List<com.annieplayer.annie_music.kt.data.model.HomeItem>,
 )
 
+data class QobuzSeeAllData(
+    val title: String,
+    val baseline: String = "",
+    val kind: com.annieplayer.annie_music.kt.data.sources.home.QobuzDiscoverKind,
+    val items: List<com.annieplayer.annie_music.kt.data.sources.home.QobuzDiscoverItem>,
+)
+
 /** 歌单详情页。 */
 class PlaylistRoute(val data: PlaylistDetailData) : AppRoute {
     override val kind: RouteKind = RouteKind.Playlist
@@ -202,6 +245,21 @@ class PlaylistRoute(val data: PlaylistDetailData) : AppRoute {
 class HomeShelfRoute(val data: HomeShelfAllData) : AppRoute {
     override val kind: RouteKind = RouteKind.HomeShelf
     override val key: String = "homeShelf:${routeSeq.incrementAndGet()}"
+}
+
+/** Qobuz 发现页区块的「全部」子页。 */
+class QobuzSeeAllRoute(val data: QobuzSeeAllData) : AppRoute {
+    override val kind: RouteKind = RouteKind.QobuzSeeAll
+    override val key: String = "qobuzSeeAll:${routeSeq.incrementAndGet()}"
+}
+
+/** Qobuz「Playlists by Category」某个分类下的歌单列表页。 */
+class QobuzTagRoute(
+    val slug: String,
+    val title: String,
+) : AppRoute {
+    override val kind: RouteKind = RouteKind.QobuzTag
+    override val key: String = "qobuzTag:${routeSeq.incrementAndGet()}"
 }
 
 /**
@@ -216,6 +274,35 @@ class KugouStyleRoute(
 ) : AppRoute {
     override val kind: RouteKind = RouteKind.KugouStyle
     override val key: String = "kugouStyle:${routeSeq.incrementAndGet()}"
+}
+
+class RankDetailRoute(
+    val platform: com.annieplayer.annie_music.kt.data.model.MusicPlatform,
+    val boardId: String,
+    val name: String,
+    val cover: String,
+    val subtitle: String = "",
+    val preload: PlaylistDetailPreload? = null,
+) : AppRoute {
+    override val kind: RouteKind = RouteKind.RankDetail
+    override val key: String = "rankDetail:${routeSeq.incrementAndGet()}"
+}
+
+class NewTabRoomRoute(
+    val platform: com.annieplayer.annie_music.kt.data.model.MusicPlatform,
+    val roomId: String,
+    val title: String,
+) : AppRoute {
+    override val kind: RouteKind = RouteKind.NewTabRoom
+    override val key: String = "newTabRoom:${routeSeq.incrementAndGet()}"
+}
+
+class AppleRankRoomRoute(
+    val sectionId: String,
+    val title: String,
+) : AppRoute {
+    override val kind: RouteKind = RouteKind.AppleRankRoom
+    override val key: String = "appleRankRoom:${routeSeq.incrementAndGet()}"
 }
 
 /**
@@ -325,26 +412,133 @@ class LocalFolderRoute(val folderName: String) : AppRoute {
 }
 
 /**
- * Qobuz 全屏详情页（从首页粘贴链接进入）。
+ * 单曲「编辑元数据」页。
  *
- * 以前它是一对 `var qobuzDetailRoute by mutableStateOf<Pair<String, String>?>`，
- * 挂在 `SearchScreenState` 上、完全绕过页面栈：返回键靠自己的 `onBack` 回调、
- * 不能叠第二层、被播放页 / 队列正确盖住也做不到（那些判断只看栈空不空）。
- * 收进 `pageStack` 之后这些都是白送的。
+ * 只带 [path]，**不带整份 meta**：内容每次从 `LocalLibraryViewModel.state.tracks` 现取，
+ * 保存成功那一瞬间页面就跟着刷新；带快照会出现「保存成功、页面还显示旧值」。
  */
-class QobuzRoute(val type: String, val id: String) : AppRoute {
-    override val kind: RouteKind = RouteKind.Qobuz
-    override val key: String = "qobuz:${routeSeq.incrementAndGet()}"
+class LocalTrackEditRoute(val path: String) : AppRoute {
+    override val kind: RouteKind = RouteKind.LocalTrackEdit
+    override val key: String = "localTrackEdit:${routeSeq.incrementAndGet()}"
 }
 
-/** KKBOX 全屏详情页（从首页粘贴链接进入）。理由同 [QobuzRoute]。 */
-class KkboxRoute(val type: String, val id: String) : AppRoute {
-    override val kind: RouteKind = RouteKind.Kkbox
-    override val key: String = "kkbox:${routeSeq.incrementAndGet()}"
+/**
+ * 单曲「搜索元数据」页（从编辑页顶栏的搜索图标**压栈**进入）。
+ *
+ * 只带 [path]：关键词、原值、候选全部由页面自己从曲库索引与网络现取，
+ * 路由里放快照会让「导入完回编辑页再进来」看到过期数据。
+ */
+class LocalMetadataSearchRoute(val path: String) : AppRoute {
+    override val kind: RouteKind = RouteKind.LocalMetadataSearch
+    override val key: String = "localMetadataSearch:${routeSeq.incrementAndGet()}"
 }
 
-/** 纯 UI 状态（对齐 Dart `UIState`） */
-data class UiState(
+/**
+ * 导入元数据页（搜索结果里点某一条进入）。
+ *
+ * 直接带上候选 [candidate]：详情页的 `AlbumRoute` 也是这个做法 —— 路由里放整份数据，
+ * 页面就不用再请求一次，也不会出现"重新搜索后候选变了"的错位。
+ */
+class LocalTagImportRoute(val path: String, val candidate: Song) : AppRoute {
+    override val kind: RouteKind = RouteKind.LocalTagImport
+    override val key: String = "localTagImport:${routeSeq.incrementAndGet()}"
+}
+
+/**
+ * 单曲「搜索歌词」页（从编辑页顶栏的「词」按钮压栈进入）。
+ *
+ * 平台范围 = Apple / 网易 / QQ / 酷狗 / 酷我（与「搜索元数据」同一批；
+ * KKBOX 要会话、Qobuz 没有公开歌词接口，两边都不参与）。
+ */
+class LocalLyricSearchRoute(val path: String) : AppRoute {
+    override val kind: RouteKind = RouteKind.LocalLyricSearch
+    override val key: String = "localLyricSearch:${routeSeq.incrementAndGet()}"
+}
+
+/** 歌词对比页的候选来源 */
+sealed interface LyricImportSource {
+    /** 流媒体平台的一条搜索结果：进页面后还要再拉一次歌词 */
+    data class Platform(val song: Song) : LyricImportSource
+
+    /** LRCLIB：歌词随搜索结果一起拿到（`syncedLrc`），进页面不再请求 */
+    data class Lrclib(val hit: com.annieplayer.annie_music.kt.data.sources.lyric.LrclibHit) :
+        LyricImportSource
+}
+
+/** 歌词对比导入页（从歌词搜索结果点进来）：只回填歌词，不动其它字段。 */
+class LocalLyricImportRoute(val path: String, val source: LyricImportSource) : AppRoute {
+    override val kind: RouteKind = RouteKind.LocalLyricImport
+    override val key: String = "localLyricImport:${routeSeq.incrementAndGet()}"
+}
+
+/**
+ * 元数据导入的一次性回填：搜索页把「选中的字段」合成一份表单交给编辑页。
+ *
+ * 为什么走 UiState 而不是直接回调：搜索页是**压在编辑页之上**的独立页面，
+ * 导入后先 `popRoute` 再回填 —— 中间隔着一次页面销毁，只有宿主（AppShell）同时看得到两边。
+ */
+data class PendingTagImport(val path: String, val form: TagEditForm)
+
+/**
+ * 歌词导入的一次性回填：搜索/对比页把选中的那份歌词交给编辑页。
+ *
+ * 与 [PendingTagImport] **分开**是刻意的：那个是整份表单（字段 + 封面），
+ * 这个只替换歌词文本框，别的字段一个字都不许动。
+ */
+data class PendingLyricImport(val path: String, val lyric: String)
+
+data class PageTint(val primary: Color, val coverUrl: String?)
+
+/** 多选是从哪个页面打开的 —— 决定动作做完之后清空哪一边的选中。 */
+enum class MultiSelectOrigin {
+    /** 单曲搜索结果（选中在 `SearchSelectionViewModel`） */
+    Search,
+
+    /** 歌手「全部单曲」页（选中在 `SingerDetailCache` 里那份） */
+    ArtistSongs,
+
+    /** 歌单详情页：选中在页面自己的 `PlaylistDetailState`，宿主不清（页面自己退出多选） */
+    PlaylistDetail,
+
+    /** 专辑详情页：选中在页面自己的 `AlbumDetailState`，宿主不清 */
+    AlbumDetail,
+
+    /** 本地曲库页 / 本地歌手全部单曲页：选中在那两页自己的状态里，宿主不清 */
+    LocalPage,
+}
+
+enum class HomeSection {
+    Recommend,
+    Rank,
+}
+
+/**
+ * 「多选操作」抽屉的内容。
+ *
+ * 抽屉本身由 `AppShell` 渲染（页面内联会被迷你播放条压住），所以页面只把
+ * 「已选了哪些歌 + 属于哪一边 + 是谁打开的」交出来，两个动作（下载 / 加入到歌单）
+ * 全在宿主执行。收起时按 [origin] 清空对应页面的选中。
+ */
+data class MultiSelectSheetState(
+    val songs: List<Song>,
+    val scope: PlaylistScope,
+    val origin: MultiSelectOrigin,
+    /** origin = [MultiSelectOrigin.ArtistSongs] 时用来定位那份缓存 */
+    val artistPlatform: MusicPlatform? = null,
+    val artistId: String? = null,
+)
+
+/**
+ * 「添加到」面板的请求：把这一批歌加进哪份自建歌单。
+ *
+ * [scope] 决定候选歌单（在线 / 本地分开）；面板本身由宿主渲染，页面只发起请求。
+ */
+data class PlaylistPickerRequest(
+    val songs: List<Song>,
+    val scope: PlaylistScope,
+)
+
+/** 纯 UI 状态（对齐 Dart `UIState`） */data class UiState(
     val playerOverlayVisible: Boolean = false,
     val queueVisible: Boolean = false,
     val drawerVisible: Boolean = false,
@@ -359,6 +553,15 @@ data class UiState(
      * [UiViewModel.setSongActionsVisible] 用 `copy()` 写它而不是 `copyWith`。
      */
     val songActionsFromUserPlaylistId: String? = null,
+    /** 多选操作抽屉的内容（null = 抽屉关着）。**必须能被清空**，所以关闭时用 `copy()`。 */
+    val multiSelectSheet: MultiSelectSheetState? = null,
+    /**
+     * 「添加到」面板（选歌单）的请求：非空时由 `AppShell` 在底栏之上渲染。
+     *
+     * 页面**不能内联**渲染它：那会画在页面内部，被迷你播放条 / 底栏压住（穿模）。
+     * 与 ⋮ → 加入到歌单、搜索多选 → 加入到歌单走同一颗面板、同一个层级。
+     */
+    val playlistPicker: PlaylistPickerRequest? = null,
     /** 多歌手选择面板是否可见 */
     val artistPickerVisible: Boolean = false,
     val pickerSong: Song? = null,
@@ -376,6 +579,24 @@ data class UiState(
      * 而这个字段恰恰需要能被清空，只能在 [UiViewModel.setLocalDeleteTarget] 里用 `copy()`。
      */
     val localDeleteTarget: Song? = null,
+    /**
+     * 批量删除的本地歌曲（非 null = 批量删除确认弹窗可见）。同样**不进 [copyWith]**。
+     */
+    val localDeleteBatch: List<Song>? = null,
+    val pageTint: PageTint? = null,
+    /**
+     * 「搜索元数据」导入回来的一次性回填（非 null 时编辑页会取走并立刻清空）。
+     *
+     * 与 [localDeleteTarget] 同样**不进 [copyWith]**：它需要能被清空，
+     * 而 `copyWith` 的语义是「null = 保留旧值」。
+     */
+    val pendingTagImport: PendingTagImport? = null,
+    /**
+     * 「搜索歌词」导入回来的一次性回填（非 null 时编辑页会取走并立刻清空）。
+     *
+     * 与 [pendingTagImport] 同样**不进 [copyWith]**，理由相同。
+     */
+    val pendingLyricImport: PendingLyricImport? = null,
     val isDragging: Boolean = false,
     val seekRatio: Double = 0.0,
     /**
@@ -394,6 +615,7 @@ data class UiState(
      * 否则搜索态下按返回会直接落到底部的退出确认。
      */
     val homeSearchExpanded: Boolean = false,
+    val homeSection: HomeSection = HomeSection.Recommend,
     val pageStack: List<AppRoute> = emptyList(),
     val downloadQueueVisible: Boolean = false,
     /** 「更多设置」整页是否可见 */
@@ -406,6 +628,10 @@ data class UiState(
     /** 「Apple Music 服务」（本机 wrapper-lite）浮层是否可见 */
     val appleServiceVisible: Boolean = false,
     val kkboxAccountVisible: Boolean = false,
+    /** 「本地扫描」（扫描范围 / 规则 / 索引）浮层是否可见 */
+    val localScanVisible: Boolean = false,
+    /** 「遥控 PC 端安妮播放器」整页浮层是否可见 */
+    val lanRemoteVisible: Boolean = false,
     val showLyricsTranslation: Boolean = true,
     /** 逐字歌词展示开关（有逐字数据时生效） */
     val showWordByWord: Boolean = true,
@@ -432,6 +658,7 @@ data class UiState(
         isDragging: Boolean? = null,
         seekRatio: Double? = null,
         homeSearchExpanded: Boolean? = null,
+        homeSection: HomeSection? = null,
         pageStack: List<AppRoute>? = null,
         downloadQueueVisible: Boolean? = null,
         moreSettingsVisible: Boolean? = null,
@@ -440,6 +667,8 @@ data class UiState(
         qobuzTokenVisible: Boolean? = null,
         appleServiceVisible: Boolean? = null,
         kkboxAccountVisible: Boolean? = null,
+        localScanVisible: Boolean? = null,
+        lanRemoteVisible: Boolean? = null,
         showLyricsTranslation: Boolean? = null,
         showWordByWord: Boolean? = null,
         currentLineIndex: Int? = null,
@@ -459,6 +688,7 @@ data class UiState(
         isDragging = isDragging ?: this.isDragging,
         seekRatio = seekRatio ?: this.seekRatio,
         homeSearchExpanded = homeSearchExpanded ?: this.homeSearchExpanded,
+        homeSection = homeSection ?: this.homeSection,
         pageStack = pageStack ?: this.pageStack,
         downloadQueueVisible = downloadQueueVisible ?: this.downloadQueueVisible,
         moreSettingsVisible = moreSettingsVisible ?: this.moreSettingsVisible,
@@ -467,9 +697,18 @@ data class UiState(
         qobuzTokenVisible = qobuzTokenVisible ?: this.qobuzTokenVisible,
         appleServiceVisible = appleServiceVisible ?: this.appleServiceVisible,
         kkboxAccountVisible = kkboxAccountVisible ?: this.kkboxAccountVisible,
+        localScanVisible = localScanVisible ?: this.localScanVisible,
+        lanRemoteVisible = lanRemoteVisible ?: this.lanRemoteVisible,
         showLyricsTranslation = showLyricsTranslation ?: this.showLyricsTranslation,
         showWordByWord = showWordByWord ?: this.showWordByWord,
         currentLineIndex = currentLineIndex ?: this.currentLineIndex,
+        // 下面三个字段**故意不在参数列表里**（`copyWith` 的 null 回退语义清不掉它们，
+        // 只能靠各自的专用 setter）。但构造时**必须显式带过去** —— 少了这几行，
+        // 任何一次 `copyWith(...)`（例如 popRoute 改 pageStack）都会把它们悄悄重建成 null：
+        // 表现就是「导入的元数据/歌词回到编辑页是空的」「删除确认弹窗莫名消失」。
+        localDeleteTarget = this.localDeleteTarget,
+        pendingTagImport = this.pendingTagImport,
+        pendingLyricImport = this.pendingLyricImport,
     )
 }
 
@@ -519,6 +758,31 @@ class UiViewModel : ViewModel() {
     }
 
     /**
+     * 打开「多选操作」抽屉。
+     *
+     * 页面只交出快照（已选歌曲 + 属于哪一边 + 是谁打开的），两个动作由宿主执行。
+     * 收起时按 `origin` 清空对应页面的选中 —— 那一步在 `AppShell` 里做，这里只管开关。
+     */
+    fun openMultiSelectSheet(state: MultiSelectSheetState) {
+        _state.value = _state.value.copy(multiSelectSheet = state)
+    }
+
+    /** 关抽屉。**必须 `copy()`**：`copyWith` 对 null 走 `?: this.x`，关不掉。 */
+    fun closeMultiSelectSheet() {
+        _state.value = _state.value.copy(multiSelectSheet = null)
+    }
+
+    /** 打开「添加到」面板（页面 → 宿主渲染，见 [PlaylistPickerRequest]）。 */
+    fun openPlaylistPicker(request: PlaylistPickerRequest) {
+        _state.value = _state.value.copy(playlistPicker = request)
+    }
+
+    /** 关「添加到」面板。**必须 `copy()`**。 */
+    fun closePlaylistPicker() {
+        _state.value = _state.value.copy(playlistPicker = null)
+    }
+
+    /**
      * 补全**当前**面板在操作的那首歌（Apple 的多歌手信息是晚一步拿到的）。
      *
      * 只在「面板还开着、而且仍然是同一首」时替换：晚到的结果不能贴到已经关掉的、
@@ -555,6 +819,40 @@ class UiViewModel : ViewModel() {
         _state.value = _state.value.copy(localDeleteTarget = song)
     }
 
+    fun setLocalDeleteBatch(songs: List<Song>?) {
+        if (_state.value.localDeleteBatch == songs) return
+        _state.value = _state.value.copy(localDeleteBatch = songs)
+    }
+
+    fun setPageTint(tint: PageTint?) {
+        if (_state.value.pageTint == tint) return
+        _state.value = _state.value.copy(pageTint = tint)
+    }
+
+    /**
+     * 搜索元数据页导入完成后，把表单交给编辑页。
+     *
+     * 同样用 `copy()`：编辑页取走时要把这个槽清成 null（`copyWith` 清不掉）。
+     */
+    fun setPendingTagImport(path: String, form: TagEditForm) {
+        _state.value = _state.value.copy(pendingTagImport = PendingTagImport(path, form))
+    }
+
+    fun clearPendingTagImport() {
+        if (_state.value.pendingTagImport == null) return
+        _state.value = _state.value.copy(pendingTagImport = null)
+    }
+
+    /** 「搜索歌词」导入回来的一次性回填（编辑页取走后会调 [clearPendingLyricImport]） */
+    fun setPendingLyricImport(path: String, lyric: String) {
+        _state.value = _state.value.copy(pendingLyricImport = PendingLyricImport(path, lyric))
+    }
+
+    fun clearPendingLyricImport() {
+        if (_state.value.pendingLyricImport == null) return
+        _state.value = _state.value.copy(pendingLyricImport = null)
+    }
+
     /** 拖动进度条（seekRatio 为 null 时归 0，对齐 Dart） */
     fun setDragging(dragging: Boolean, seekRatio: Double? = null) {
         _state.value = _state.value.copyWith(isDragging = dragging, seekRatio = seekRatio ?: 0.0)
@@ -588,28 +886,42 @@ class UiViewModel : ViewModel() {
         _state.value = _state.value.copyWith(kkboxAccountVisible = visible)
     }
 
+    fun setLocalScanVisible(visible: Boolean) {
+        _state.value = _state.value.copyWith(localScanVisible = visible)
+    }
+
+    fun setLanRemoteVisible(visible: Boolean) {
+        _state.value = _state.value.copyWith(lanRemoteVisible = visible)
+    }
+
     /** 展开 / 收起主页的搜索态（搜索是主页的形态，不是页面）。 */
     fun setHomeSearchExpanded(expanded: Boolean) {
         if (_state.value.homeSearchExpanded == expanded) return
         _state.value = _state.value.copyWith(homeSearchExpanded = expanded)
     }
 
+    fun setHomeSection(section: HomeSection) {
+        if (_state.value.homeSection == section) return
+        _state.value = _state.value.copyWith(homeSection = section)
+    }
+
     /** 压入一个子页面：栈顶渲染在最上层，返回先处理。 */
     fun pushRoute(route: AppRoute) {
-        _state.value = _state.value.copyWith(pageStack = _state.value.pageStack + route)
+        // 用 `copy()` 而不是 `copyWith()`：这里只改栈，别的字段一个都不该被"重建"
+        _state.value = _state.value.copy(pageStack = _state.value.pageStack + route)
     }
 
     /** 弹出栈顶页面（返回逐层退回；空栈时为 no-op）。 */
     fun popRoute() {
         val stack = _state.value.pageStack
         if (stack.isEmpty()) return
-        _state.value = _state.value.copyWith(pageStack = stack.dropLast(1))
+        _state.value = _state.value.copy(pageStack = stack.dropLast(1))
     }
 
     /** 清空页面栈（回到当前 tab 的根页）。 */
     fun clearRoutes() {
         if (_state.value.pageStack.isEmpty()) return
-        _state.value = _state.value.copyWith(pageStack = emptyList())
+        _state.value = _state.value.copy(pageStack = emptyList())
     }
 
     fun setShowLyricsTranslation(visible: Boolean) {
@@ -642,8 +954,6 @@ fun UiState.toOverlayFlags(
     translatePicker: Boolean = false,
     /** `SearchScreenState.sourcePickerVisible` —— 同上。 */
     sourcePicker: Boolean = false,
-    /** 搜索页「待下载」面板是否打开（`SearchSelectionViewModel.state.overlayVisible`）—— 同上。 */
-    searchSelectionOverlay: Boolean = false,
     /**
      * 搜索页是否处于多选态（`selectedSongs` 非空）—— 同上。
      *
@@ -652,13 +962,15 @@ fun UiState.toOverlayFlags(
     searchSelection: Boolean = false,
 ): OverlayVisibilityFlags = OverlayVisibilityFlags(
     songActions = songActionsVisible,
+    multiSelect = multiSelectSheet != null,
+    playlistPicker = playlistPicker != null,
     artistPicker = artistPickerVisible,
     qualityPicker = pickerVisible || extraQualityPicker,
     queue = queueVisible,
     playerOverlay = playerOverlayVisible,
     translatePicker = translatePicker,
     cacheClear = cacheClearVisible,
-    localDelete = localDeleteTarget != null,
+    localDelete = localDeleteTarget != null || localDeleteBatch != null,
     contact = contactVisible,
     sourcePicker = sourcePicker,
     lxPluginManager = lxPluginManagerVisible,
@@ -667,8 +979,9 @@ fun UiState.toOverlayFlags(
     kkboxAccount = kkboxAccountVisible,
     qobuzToken = qobuzTokenVisible,
     appleService = appleServiceVisible,
+    localScan = localScanVisible,
+    lanRemote = lanRemoteVisible,
     page = pageStack.isNotEmpty(),
-    searchSelectionOverlay = searchSelectionOverlay,
     searchSelection = searchSelection,
     searchExpanded = homeSearchExpanded,
     downloadQueue = downloadQueueVisible,

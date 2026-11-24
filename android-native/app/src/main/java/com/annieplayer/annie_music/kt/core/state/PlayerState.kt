@@ -35,14 +35,25 @@ import java.util.concurrent.ConcurrentHashMap
  *
  * 由后续「音频引擎」任务实现并通过 [PlayerViewModel.setBackend] 注入；本层只依赖该接口。
  * Dart 的 `Future<T>` -> Kotlin `suspend fun`，Dart `Stream<Map>` -> Kotlin `Flow<Map>`。
- * 事件 key 与 Dart 完全一致：`absoluteIndex` / `isPlaying` / `position` / `duration`。
+ * 事件 key：`isPlaying` / `position` / `duration` / `switchTo`。
  */
 interface PlayerBackend {
+
+    companion object {
+        const val EVENT_SWITCH_TO: String = "switchTo"
+        const val EVENT_START_AT: String = "startAt"
+    }
+
     /** 初始化引擎（对齐 Dart `setup()`） */
     suspend fun setup()
 
     /** 设置队列并跳转到 startIndex；loopMode 取 Dart 枚举名（sequential/single/shuffle） */
-    suspend fun setQueue(items: List<Map<String, String>>, startIndex: Int, loopMode: String)
+    suspend fun setQueue(
+        items: List<Map<String, String>>,
+        startIndex: Int,
+        loopMode: String,
+        startPositionMs: Long = 0L,
+    )
 
     suspend fun skipNext()
 
@@ -272,18 +283,12 @@ class PlayerViewModel : ViewModel() {
      */
     private var _pendingRestorePlayMs: Long = -1L
 
-    /**
-     * 恢复播放时「等播放器 ready 再 seek 到哪」（毫秒）；0 = 没有待办。
-     *
-     * 不能在 `setQueue` 之后立刻 seek：那时 ExoPlayer 常还在 BUFFERING，seek 会打断加载，
-     * 结果是停在正确位置却不出声。等第一个 `position` 事件到了再 seek 才稳。
-     */
-    private var _pendingSeekAfterStart: Long = 0L
-
     /** 最近一次已知播放位置（毫秒），用于节流写盘 */
     private var _lastPositionMs: Long = 0L
 
     private var _lastPositionWriteAt: Long = 0L
+
+    private val _positionTarget: PositionTarget = PositionTarget()
 
     /**
      * 初始化**必须放在所有字段声明之后**。
@@ -313,8 +318,12 @@ class PlayerViewModel : ViewModel() {
         if (songs.isEmpty()) return
         val idx = snap.index.coerceIn(0, songs.lastIndex)
         val cur = songs[idx]
-        _pendingResumeMs = snap.positionMs
-        _lastPositionMs = snap.positionMs
+        // 盘里可能躺着坏位置（独占通路曾把 +10^6 秒写进去）。超出时长就整条不再采信，
+        // 从头开始 —— 贴着末尾"恢复"等于一按播放就跳下一首。
+        val durMs = cur.duration.toLong() * 1000L
+        val resumeMs = if (durMs > 0 && snap.positionMs > durMs) 0L else snap.positionMs.coerceAtLeast(0L)
+        _pendingResumeMs = resumeMs
+        _lastPositionMs = resumeMs
         _backendQueueReady = false
         _state.value = _state.value.copy(
             queue = songs,
@@ -333,7 +342,7 @@ class PlayerViewModel : ViewModel() {
             },
         )
         _progress.value = PlaybackProgress(
-            currentTime = snap.positionMs / 1000.0,
+            currentTime = resumeMs / 1000.0,
             duration = if (cur.duration > 0) cur.duration.toDouble() else 0.0,
         )
         // 恢复的这首歌也要补歌词：重启后接着放，进度和队列都回来了，但歌词不能是空的
@@ -353,13 +362,7 @@ class PlayerViewModel : ViewModel() {
     }
 
     /**
-     * 恢复态下的首次播放：装载队列 → 播放；**续播位置的 seek 交给第一个进度事件**。
-     *
-     * 为什么不在 `setQueue` 之后立刻 seek：`setQueue` 只负责 `setMediaSource + prepare`，
-     * 返回时 ExoPlayer 往往还在 BUFFERING。此时 `seekTo` 会取消当前加载、重新定位，
-     * 真机表现就是「seek 到了正确位置，但一直不出声、进度也不动」（`isPlaying` 始终 false）。
-     * 改成等后端推来第一个 `position` 事件（= 播放器已 ready 且在走）再 seek，
-     * 位置准确且不会打断加载。
+     * 恢复态下的首次播放：把续播位置**交给 `setQueue`**，由引擎在自己 READY 时执行并自检。
      *
      * 失败（引擎未注入 / setQueue 抛异常）时**必须把 isPlaying 复位**，
      * 否则状态机会卡在"显示正在播放但引擎里没有队列"。
@@ -375,7 +378,12 @@ class PlayerViewModel : ViewModel() {
                 return@launch
             }
             val queued = try {
-                b.setQueue(st.queue.map { _toBackendItem(it) }, st.currentIndex, st.loopMode.name)
+                b.setQueue(
+                    st.queue.map { _toBackendItem(it) },
+                    st.currentIndex,
+                    st.loopMode.name,
+                    startPositionMs = seekMs,
+                )
                 _backendQueueReady = true
                 true
             } catch (_: Throwable) {
@@ -385,10 +393,16 @@ class PlayerViewModel : ViewModel() {
                 _state.value = _state.value.copyWith(isPlaying = false)
                 return@launch
             }
-            // setQueue 内部已经 play()；这里只登记"等 ready 后要 seek 到哪"
-            if (seekMs > 0) _pendingSeekAfterStart = seekMs
-            runCatching { b.play() }
-        }
+            if (seekMs > 0) {
+                _positionTarget.begin(
+                    seekMs / 1000.0,
+                    android.os.SystemClock.elapsedRealtime(),
+                    RESTORE_WINDOW_MS,
+                )
+                _publishPosition()
+                _lastPositionMs = seekMs
+            }
+            runCatching { b.play() }        }
     }
 
     /**
@@ -478,25 +492,11 @@ class PlayerViewModel : ViewModel() {
         if (backend == null) return
         _eventJob = viewModelScope.launch {
             backend.events.collect { event ->
-                // 绝对索引变化 -> 切歌（更新当前曲目并触发时长/歌词加载）
-                val idx = event["absoluteIndex"]
-                if (idx is Int && _state.value.queue.isNotEmpty()) {
-                    val q = _state.value.queue
-                    val song = if (idx in q.indices) q[idx] else _state.value.currentSong
-                    val songChanged = song?.id != _state.value.currentSong?.id
-                    _state.value = _state.value.copyWith(
-                        currentIndex = idx,
-                        currentSong = song,
-                        // 切歌先清空音质胶囊，等引擎探测/解析结果下发后再填充
-                        audioInfo = if (songChanged) AudioInfo() else null,
-                    )
-                    if (songChanged) _onSongChanged(song)
+                val switchTo = event[PlayerBackend.EVENT_SWITCH_TO]
+                if (switchTo is Int) {
+                    val startAt = (event[PlayerBackend.EVENT_START_AT] as? Number)?.toDouble() ?: 0.0
+                    _applySwitch(switchTo, startAt)
                 }
-
-                // 随机模式下引擎提前定好的「下一首」：点「下一首」时用它做乐观 UI，
-                // 保证界面切的歌和实际播的是同一首（此前两边各掷一次随机会不一致）
-                val nextIdx = event["nextIndex"]
-                if (nextIdx is Int) _shuffleNextHint = nextIdx
 
                 val audioInfo = event["audioInfo"]
                 if (audioInfo is AudioInfo && !audioInfo.isEmpty) {
@@ -516,27 +516,21 @@ class PlayerViewModel : ViewModel() {
                 val dur = event["duration"]
                 if (pos is Number || dur is Number) {
                     val prev = _progress.value
+                    val nextDur = if (dur is Number && dur.toDouble() > 0) dur.toDouble() else prev.duration
+                    val rawPos = if (pos is Number) pos.toDouble() else prev.currentTime
+                    val clamped = _clampPosition(rawPos, nextDur)
+                    val shown = if (pos is Number) {
+                        _positionTarget.onEvent(clamped, android.os.SystemClock.elapsedRealtime())
+                    } else {
+                        _positionTarget.display
+                    }
                     _progress.value = PlaybackProgress(
-                        currentTime = if (pos is Number) pos.toDouble() else prev.currentTime,
-                        // 后端真实时长优先；为 0 / 未就绪时保留元数据时长
-                        duration = if (dur is Number && dur.toDouble() > 0) {
-                            dur.toDouble()
-                        } else {
-                            prev.duration
-                        },
+                        currentTime = shown,
+                        duration = nextDur,
                         bufferedTime = prev.bufferedTime,
                     )
-                    // 播放现场落盘：位置每 5 秒记一次（进程被杀也不至于丢太多），
-                    // 暂停/切歌/seek 另有即时写入。
-                    if (pos is Number) {
-                        _lastPositionMs = (pos.toDouble() * 1000).toLong().coerceAtLeast(0L)
-                        // 恢复播放的续播位置：等播放器真的开始走（第一个进度事件）再 seek，
-                        // 避免在 BUFFERING 里 seek 打断加载 → 停在正确位置却不出声。
-                        val pendingSeek = _pendingSeekAfterStart
-                        if (pendingSeek > 0) {
-                            _pendingSeekAfterStart = 0
-                            _backendCall { it.seekTo(pendingSeek / 1000.0) }
-                        }
+                    if (!_positionTarget.pending && pos is Number && (nextDur <= 0.0 || rawPos <= nextDur)) {
+                        _lastPositionMs = (shown * 1000).toLong().coerceAtLeast(0L)
                         val now = System.currentTimeMillis()
                         if (now - _lastPositionWriteAt >= 5_000) {
                             _lastPositionWriteAt = now
@@ -550,9 +544,6 @@ class PlayerViewModel : ViewModel() {
 
     /** 清理播放缓存（转发给引擎；未接线时返回 0） */
     suspend fun clearPlaybackCache(): Long = _backend?.clearPlaybackCache() ?: 0L
-
-    /** 随机模式下引擎提前定好的下一首下标（`nextIndex` 事件）；null = 还没有 */
-    private var _shuffleNextHint: Int? = null
 
     /** 引擎调用（fire-and-forget，异常静默，对齐 Dart 未 await 的调用点） */
     private fun _backendCall(block: suspend (PlayerBackend) -> Unit) {
@@ -574,15 +565,15 @@ class PlayerViewModel : ViewModel() {
      */
     private fun _onSongChanged(song: Song?) {
         if (song == null) return
-        // 切歌把位置归零；时长先用元数据兜底（引擎 200ms 内会用真实值覆盖，
-        // 所以这里拿不到元数据时长时保留上一个值，与原 `copyWith(duration = null)` 同义）
-        val prev = _progress.value
         _progress.value = PlaybackProgress(
-            currentTime = 0.0,
-            duration = if (song.duration > 0) song.duration.toDouble() else prev.duration,
-            bufferedTime = prev.bufferedTime,
+            currentTime = _positionTarget.display,
+            duration = if (song.duration > 0) song.duration.toDouble() else 0.0,
         )
         _ensureLyric(song)
+    }
+
+    private fun _publishPosition() {
+        _progress.value = _progress.value.copy(currentTime = _positionTarget.display)
     }
 
     /**
@@ -617,14 +608,94 @@ class PlayerViewModel : ViewModel() {
     // ── 状态迁移（逐条对齐 Dart） ──
 
     /**
+     * 曲库里某首歌的标签/封面变了 → 把队列与当前曲目里的同一首**原地换掉元数据**。
+     *
+     * 只动 UI 侧数据：
+     * - 引擎的 timeline 是 `file://` 地址（文件没变），**不重设源**，播放与进度都不受影响；
+     * - 旧的 `playUrl` / `qualities` 保留；**歌词**由 [reloadLyricFor] 单独重读。
+     *
+     * 为什么需要它：`currentSong` 是编辑那一刻的 `Song` **快照**，曲库里的
+     * `LocalTrackMeta` 更新了它也不会自己变 —— 症状就是「改完标签，播放页还显示旧标题/旧封面」。
+     *
+     * @param reloadLyric 同时重读当前曲的歌词（导入/编辑歌词后必须传 true）
+     */
+    fun refreshSongMetadata(updated: Song, reloadLyric: Boolean = false) {
+        val id = updated.id
+        // merge 里**没有** lyric / tlyric / wordLyric：歌词由下面的 [reloadLyricFor] 单独负责。
+        // 顺序也不能反过来 —— 先 merge 再重读。反过来的话，重读的结果（`viewModelScope` 是
+        // Main.immediate，本地读文件没有挂起点，会在这个函数里就同步写完）会被下面那次
+        // 「拿旧快照写回」顶掉，表现成「导入完元数据，播放页歌词还是旧的、标题却是新的」。
+        fun merge(old: Song): Song = old.copy(
+            title = updated.title,
+            artist = updated.artist,
+            artistNames = updated.artistNames,
+            album = updated.album,
+            albumArtist = updated.albumArtist,
+            trackNumber = updated.trackNumber,
+            discNumber = updated.discNumber,
+            releaseDate = updated.releaseDate,
+            genre = updated.genre,
+            composer = updated.composer,
+            isrc = updated.isrc,
+            // 封面可能正在重抽（写完标签时旧图已删）—— 空值就保留旧的，
+            // 等封面抽好会有下一次刷新（调用方按 meta 变化触发）
+            cover = updated.cover.ifBlank { old.cover },
+        )
+        // 合并对象取自**最新** state，不用函数开头那份快照：`reloadLyricFor` 可能已经动过歌词。
+        val st = _state.value
+        val newQueue = st.queue.map { if (it.id == id) merge(it) else it }
+        val newCurrent = st.currentSong?.let { if (it.id == id) merge(it) else it }
+        if (newQueue != st.queue || newCurrent != st.currentSong) {
+            _state.value = st.copyWith(queue = newQueue, currentSong = newCurrent)
+        }
+        if (reloadLyric) {
+            val current = _state.value.currentSong
+            if (current != null && current.id == id) reloadLyricFor(current)
+        }
+    }
+
+    /**
+     * 强制重读某一首的歌词（绕开 `_ensureLyric` 的「已有词就跳过」）。
+     *
+     * 场景：正在播放的本地歌，用户刚改了内嵌歌词或写了同名 `.lrc`。
+     * `fetchLyric` 对 `platform = local` 是**直接读文件**（同名 `.lrc` → 内嵌 tag），
+     * 不联网、不进缓存，所以重读是瞬时且必然拿到最新那份。
+     */
+    fun reloadLyricFor(song: Song) {
+        if (_disposed) return
+        // 这里**不**用 `add` 的返回值当闸门：开播那一刻 `_ensureLyric` 可能正好在途，
+        // 被它挡掉就变成「刚改完歌词不生效，切一次歌才出来」。两个请求读的是同一份文件，
+        // 后到的覆盖先到的即可，不存在互相污染。
+        _lyricFetching.add(song.id)
+        val kkboxSid = if (song.platform == MusicPlatform.kkbox) kkboxSidProvider?.invoke() else null
+        viewModelScope.launch {
+            try {
+                val r = fetchLyric(song, kkboxSid, autoPickTranslate = true)
+                if (!_disposed) {
+                    updateSongLyric(
+                        song.id,
+                        r.lrc,
+                        r.tlyric,
+                        r.wordLyric,
+                        r.translateLangs,
+                        r.translateLang,
+                    )
+                }
+            } catch (_: Throwable) {
+                // 读不到就保留旧词（文件被删 / 格式不支持），不打扰播放
+            } finally {
+                _lyricFetching.remove(song.id)
+            }
+        }
+    }
+
+    /**
      * 设置队列并从 startIndex 开播；整体重建 state，但**沿用当前循环模式**（切歌不该把模式打回顺序）。
      *
      * @param fromPlaylist 从歌单详情开播时传它，供全局 ⋮ 面板「跳转到歌单」用；其它入口留空。
      */
     fun setQueue(songs: List<Song>, startIndex: Int = 0, fromPlaylist: PlaylistDetailData? = null) {
         val mode = _state.value.loopMode
-        // 换队列：随机下一首的提示作废（下标已经对不上了）
-        _shuffleNextHint = null
         _state.value = PlayerState(
             queue = songs,
             currentIndex = startIndex,
@@ -638,6 +709,7 @@ class PlayerViewModel : ViewModel() {
             queuePlaylist = fromPlaylist,
         )
         // 换队列 = 新曲目：进度归零（队列为空时也要清，否则界面还挂着上一首的时长）
+        _positionTarget.reset()
         _progress.value = PlaybackProgress(
             currentTime = 0.0,
             duration = if (songs.isEmpty()) 0.0 else songs[startIndex].duration.toDouble(),
@@ -793,8 +865,7 @@ class PlayerViewModel : ViewModel() {
      *
      * 与播放模式的关系：
      * - 顺序 / 单曲：下一首按**画面上的顺序**走，拖完立即生效。
-     * - 随机：「下一首」是引擎随机掷的，拖拽不改变掷骰结果，只改列表顺序；
-     *   这里把 `_shuffleNextHint` 作废，让引擎重掷（否则它会指向拖拽后错位的那首歌）。
+     * - 随机：「下一首」是引擎随机掷的，拖拽不改变掷骰结果，只改列表顺序。
      */
     fun moveInQueue(from: Int, to: Int) {
         val st = _state.value
@@ -802,7 +873,6 @@ class PlayerViewModel : ViewModel() {
         if (from !in st.queue.indices || to !in st.queue.indices) return
         val newQueue = st.queue.toMutableList().apply { add(to, removeAt(from)) }
         val newIndex = indexAfterMove(st.currentIndex, from, to)
-        _shuffleNextHint = null
         _state.value = st.copyWith(queue = newQueue, currentIndex = newIndex)
         _backendCall { it.moveQueueItem(from, to) }
         // 顺序是「播放现场」的一部分：不落盘的话，重启恢复的是旧顺序，
@@ -810,61 +880,47 @@ class PlayerViewModel : ViewModel() {
         _persistQueueSnapshot()
     }
 
-    /**
-     * 下一首：**先把 UI 切过去**（封面/标题/歌手/进度条/歌词立刻跟着点的那一下走），
-     * 音频在后台解析 + 加载，出声比信息慢是正常的，信息不需要等出声。
-     */
     fun next() {
         val st = _state.value
         if (st.queue.isEmpty()) return
-        val nextIndex: Int = when (st.loopMode) {
-            // 随机：认引擎提前定好的那首（没有提示就原地不动，等引擎的 absoluteIndex 事件纠正）
-            LoopMode.shuffle -> _shuffleNextHint ?: st.currentIndex
-            LoopMode.single -> st.currentIndex
-            LoopMode.sequential -> (st.currentIndex + 1) % st.queue.size
+        if (_backendQueueReady) {
+            _backendCall { it.skipNext() }
+            return
         }
-        val nextSong = st.queue[nextIndex]
-        _state.value = st.copyWith(currentIndex = nextIndex, currentSong = nextSong, isPlaying = true)
-        _onSongChanged(nextSong)
-        _backendCall { it.skipNext() }
-        _lastPositionMs = 0
-        _persistResumeState()
+        _applySwitch((st.currentIndex + 1) % st.queue.size)
     }
 
     fun previous() {
         val st = _state.value
         if (st.queue.isEmpty()) return
-        val prevIndex: Int = when (st.loopMode) {
-            LoopMode.shuffle -> _shuffleNextHint ?: st.currentIndex
-            else -> (st.currentIndex - 1 + st.queue.size) % st.queue.size
+        if (_backendQueueReady) {
+            _backendCall { it.skipPrevious() }
+            return
         }
-        val prevSong = st.queue[prevIndex]
-        _state.value = st.copyWith(currentIndex = prevIndex, currentSong = prevSong, isPlaying = true)
-        _onSongChanged(prevSong)
-        _backendCall { it.skipPrevious() }
-        _lastPositionMs = 0
-        _persistResumeState()
-    }
-
-    fun seekTo(index: Int) {
-        val st = _state.value
-        if (index < 0 || index >= st.queue.size) return
-        val song = st.queue[index]
-        _state.value = st.copyWith(currentIndex = index, currentSong = song)
-        _onSongChanged(song)
-        _lastPositionMs = 0
-        _persistResumeState()
+        _applySwitch((st.currentIndex - 1 + st.queue.size) % st.queue.size)
     }
 
     fun playIndex(index: Int) {
-        val st = _state.value
-        if (index < 0 || index >= st.queue.size) return
-        val song = st.queue[index]
-        // 同 [next]：UI 立刻切，音频随后加载
-        _state.value = st.copyWith(currentIndex = index, currentSong = song, isPlaying = true)
-        _onSongChanged(song)
-        _backendCall { it.skipTo(index) }
-        _lastPositionMs = 0
+        if (index !in _state.value.queue.indices) return
+        if (_backendQueueReady) {
+            _backendCall { it.skipTo(index) }
+            return
+        }
+        _applySwitch(index)
+    }
+
+    private fun _applySwitch(index: Int, startAtSec: Double = 0.0) {
+        val next = switchState(_state.value, index) ?: return
+        val from = if (startAtSec.isFinite()) startAtSec.coerceAtLeast(0.0) else 0.0
+        _state.value = next
+        _pendingResumeMs = 0
+        _lastPositionMs = (from * 1000).toLong()
+        _positionTarget.begin(
+            from,
+            android.os.SystemClock.elapsedRealtime(),
+            if (from > 0.0) RESTORE_WINDOW_MS else SWITCH_WINDOW_MS,
+        )
+        _onSongChanged(next.currentSong)
         _persistResumeState()
     }
 
@@ -914,7 +970,10 @@ class PlayerViewModel : ViewModel() {
     }
 
     /**
-     * 写入歌词。[tlyric] / [wordLyric] **覆盖式**写入（可清空）；[translateLangs] 为 null 时保留原值。
+     * 写入歌词。[tlyric] / [wordLyric] **覆盖式**写入（可清空）；[translateLangs] 为 null 或空清单时保留原值。
+     *
+     * 空清单是「这次没取到」，不是「这首歌没有译文」—— 后者靠 `tlyric == null` 表达。
+     * 把它当成清空会让语言下拉在取不到时整条消失（换语言时尤其明显）。
      *
      * 不动 [Song.lyricTranslateLang]（切换译文语言走 [setSongTranslateLang]）。
      */
@@ -930,7 +989,7 @@ class PlayerViewModel : ViewModel() {
             lyric = lrc,
             tlyric = tlyric,
             wordLyric = wordLyric,
-            lyricTranslateLangs = translateLangs ?: s.lyricTranslateLangs,
+            lyricTranslateLangs = translateLangs?.takeIf { it.isNotEmpty() } ?: s.lyricTranslateLangs,
             lyricTranslateLang = translateLang ?: s.lyricTranslateLang,
         )
         val cs = _state.value.currentSong
@@ -957,9 +1016,28 @@ class PlayerViewModel : ViewModel() {
                     updateSongLyric(tagged.id, r.lrc, r.tlyric, r.wordLyric, r.translateLangs, r.translateLang)
                 }
             } catch (_: Throwable) {
-                // 重取失败：保留已有原文歌词
+                // 重取失败：语言和译文一起回滚，别留下「选了语言但没有译文」的中间态
+                if (!_disposed) {
+                    val cur = _state.value.currentSong
+                    _state.value = _state.value.copyWith(
+                        queue = _state.value.queue.map { if (it.id == song.id) song else it },
+                        currentSong = if (cur != null && cur.id == song.id) song else cur,
+                    )
+                }
             }
         }
+    }
+
+    /**
+     * 位置钳制：非有限值 / 负数归零；已知时长时不许超过时长。
+     *
+     * 存在的理由只有一个 —— 后端偶尔会给出**荒谬的位置**（独占通路实测：正常进度 + 10^6 秒），
+     * 而界面与落盘都直接吃这个数。这里只做"上限"，不猜真实位置：真位置的修正属于引擎那一层。
+     */
+    private fun _clampPosition(seconds: Double, duration: Double): Double = when {
+        !seconds.isFinite() -> 0.0
+        duration > 0 -> seconds.coerceIn(0.0, duration)
+        else -> seconds.coerceAtLeast(0.0)
     }
 
     fun setCurrentTime(t: Double) {
@@ -989,10 +1067,13 @@ class PlayerViewModel : ViewModel() {
     /** 按秒 seek（对齐 Flutter `playerBackendProvider.state?.seekTo(t)`） */
     fun seekToSeconds(seconds: Double) {
         if (seconds.isNaN() || seconds.isInfinite() || seconds < 0) return
-        _progress.value = _progress.value.copy(currentTime = seconds)
-        _backendCall { it.seekTo(seconds) }
+        // 拖动比例 × 时长：时长若在某次事件里是坏值，这里就是最后一道闸
+        val target = _clampPosition(seconds, _progress.value.duration)
+        _positionTarget.begin(target, android.os.SystemClock.elapsedRealtime(), SEEK_WINDOW_MS)
+        _publishPosition()
+        _backendCall { it.seekTo(target) }
         // 拖动进度条后立刻记下位置：这时候退出/被杀，下次应该从这里续
-        _lastPositionMs = (seconds * 1000).toLong().coerceAtLeast(0L)
+        _lastPositionMs = (target * 1000).toLong().coerceAtLeast(0L)
         _persistResumeState()
     }
 
@@ -1024,3 +1105,14 @@ class PlayerViewModel : ViewModel() {
         }
     }
 }
+
+internal fun switchState(st: PlayerState, index: Int): PlayerState? {
+    val song = st.queue.getOrNull(index) ?: return null
+    return st.copyWith(
+        currentIndex = index,
+        currentSong = song,
+        isPlaying = true,
+        audioInfo = AudioInfo(),
+    )
+}
+

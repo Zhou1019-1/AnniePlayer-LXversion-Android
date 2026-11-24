@@ -19,11 +19,14 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.pager.HorizontalPager
@@ -36,13 +39,14 @@ import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
@@ -52,11 +56,20 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.drawscope.clipRect
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
@@ -66,6 +79,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.annieplayer.annie_music.kt.core.audio.apple.ApplePrefetch
@@ -74,11 +88,13 @@ import com.annieplayer.annie_music.kt.core.routing.BackTarget
 import com.annieplayer.annie_music.kt.core.routing.handleBack
 import com.annieplayer.annie_music.kt.core.state.AlbumDetailData
 import com.annieplayer.annie_music.kt.core.state.AlbumRoute
-import com.annieplayer.annie_music.kt.core.state.AppleReleaseSection
+import com.annieplayer.annie_music.kt.core.state.AlbumGroup
 import com.annieplayer.annie_music.kt.core.state.ColorViewModel
 import com.annieplayer.annie_music.kt.core.state.DownloadViewModel
 import com.annieplayer.annie_music.kt.core.state.FavoriteViewModel
 import com.annieplayer.annie_music.kt.core.state.MoreSettings
+import com.annieplayer.annie_music.kt.core.state.MultiSelectOrigin
+import com.annieplayer.annie_music.kt.core.state.MultiSelectSheetState
 import com.annieplayer.annie_music.kt.core.util.enqueueDownload
 import com.annieplayer.annie_music.kt.data.resolveDownloadLyric
 import com.annieplayer.annie_music.kt.core.util.downloadQualityFor
@@ -95,6 +111,7 @@ import com.annieplayer.annie_music.kt.core.state.toOverlayFlags
 import com.annieplayer.annie_music.kt.data.DownloadDirService
 import com.annieplayer.annie_music.kt.data.enrichSong
 import com.annieplayer.annie_music.kt.data.favorites.FavoriteKeys
+import com.annieplayer.annie_music.kt.data.favorites.PlaylistScope
 import com.annieplayer.annie_music.kt.data.artistSongsBatchSize
 import com.annieplayer.annie_music.kt.data.fetchArtistAlbumsByPlatform
 import com.annieplayer.annie_music.kt.data.fetchArtistAvatarByPlatform
@@ -106,12 +123,17 @@ import com.annieplayer.annie_music.kt.data.fetchDownloadUrlBySong
 import com.annieplayer.annie_music.kt.data.fetchPlayUrlBySong
 import com.annieplayer.annie_music.kt.data.playQualityLabelOf
 import com.annieplayer.annie_music.kt.data.model.MusicPlatform
+import com.annieplayer.annie_music.kt.data.sources.apple.appleArtistMotionById
+import com.annieplayer.annie_music.kt.data.sources.apple.findAppleArtistMotionCover
 import com.annieplayer.annie_music.kt.data.sources.apple.getAppleArtistReleases
 import com.annieplayer.annie_music.kt.data.model.Album
+import com.annieplayer.annie_music.kt.data.model.ALBUM_KIND_ALBUM
+import com.annieplayer.annie_music.kt.data.model.ALBUM_KIND_EP
+import com.annieplayer.annie_music.kt.data.model.ALBUM_KIND_SINGLE
+import com.annieplayer.annie_music.kt.data.model.albumKind
 import com.annieplayer.annie_music.kt.data.model.ArtistSongsPageSize
 import com.annieplayer.annie_music.kt.data.model.DownloadStatus
 import com.annieplayer.annie_music.kt.data.model.DownloadTask
-import com.annieplayer.annie_music.kt.data.model.Quality
 import com.annieplayer.annie_music.kt.data.model.Song
 import com.annieplayer.annie_music.kt.data.network.globalOkHttp
 import com.annieplayer.annie_music.kt.data.sources.kuwo.buildAlbumCoverUrl
@@ -122,6 +144,9 @@ import com.annieplayer.annie_music.kt.ui.theme.AppEasing
 import com.annieplayer.annie_music.kt.ui.theme.AppFontSize
 import com.annieplayer.annie_music.kt.ui.theme.AppFontWeight
 import com.annieplayer.annie_music.kt.ui.theme.AppIconSize
+import com.annieplayer.annie_music.kt.R
+import androidx.compose.ui.res.painterResource
+import com.annieplayer.annie_music.kt.widgets.DetailRoundIconButton
 import com.annieplayer.annie_music.kt.ui.theme.AppRadius
 import com.annieplayer.annie_music.kt.ui.theme.AppSize
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
@@ -175,11 +200,11 @@ fun SingerDetailSheet(
     /** 本实例渲染哪一页（由路由决定，进来之后不再变）。 */
     page: SingerDetailPage = SingerDetailPage.overview,
     /** 仅「全部专辑」页：Apple 只看某一段；其它平台传 null。 */
-    albumSection: AppleReleaseSection? = null,
+    albumSection: AlbumGroup? = null,
     /** overview 的「最热门 · 全部 ›」：宿主压 `SingerSongsRoute`。 */
     onOpenSongs: () -> Unit = {},
     /** overview 的专辑段「全部 ›」：宿主压 `SingerAlbumsRoute`；Apple 传对应段。 */
-    onOpenAlbums: (AppleReleaseSection?) -> Unit = {},
+    onOpenAlbums: (AlbumGroup?) -> Unit = {},
     colorViewModel: ColorViewModel = activityViewModel(),
 ) {
     // 数据与可见性由宿主（详情真栈）传入：不再读 uiState 里的可见性/数据，也没有 early-return。
@@ -211,9 +236,9 @@ private fun SingerDetailContent(
     downloadViewModel: DownloadViewModel,
     colorViewModel: ColorViewModel,
     page: SingerDetailPage,
-    albumSection: AppleReleaseSection?,
+    albumSection: AlbumGroup?,
     onOpenSongs: () -> Unit,
-    onOpenAlbums: (AppleReleaseSection?) -> Unit,
+    onOpenAlbums: (AlbumGroup?) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val uiState by uiViewModel.state.collectAsState()
@@ -361,6 +386,17 @@ private fun SingerDetailContent(
         }
     }
 
+    suspend fun loadMotionIfNeeded() {
+        if (st.motionChecked) return
+        st.motionChecked = true
+        val found = if (data.platform == MusicPlatform.apple) {
+            runCatching { appleArtistMotionById(data.id) }.getOrNull()
+        } else {
+            runCatching { findAppleArtistMotionCover(data.name) }.getOrNull()
+        } ?: return
+        if (found.motionCover.isNotEmpty()) st.motionCover = found.motionCover
+    }
+
     // 简介必须独立于头像请求：从「跳转到歌手」进来时 data.picture 非空，头像那一支会直接跳过
     suspend fun loadBioIfNeeded() {
         if (st.bio.isNotEmpty()) return
@@ -372,18 +408,18 @@ private fun SingerDetailContent(
         }
     }
 
+    /**
+     * 切换一首的选中。勾到一首不剩就**自动退出多选** ——
+     * 与搜索结果页同一条规则：那里「多选态」本身就等于「已选非空」，
+     * 这里若留在多选态，行还是「点了变选中」而不是播放，用户会以为列表坏了。
+     */
     fun toggleSelect(song: Song) {
         val idx = st.selectedSongs.indexOfFirst { it.id == song.id }
-        if (idx >= 0) st.selectedSongs.removeAt(idx) else st.selectedSongs.add(song)
-    }
-
-    /** 进入 / 退出多选；退出时连同已选歌曲一并清空（等价原「清空」的观感）。 */
-    fun toggleSelectMode() {
-        if (st.selectMode) {
-            st.selectMode = false
-            st.selectedSongs.clear()
+        if (idx >= 0) {
+            st.selectedSongs.removeAt(idx)
+            if (st.selectedSongs.isEmpty()) st.selectMode = false
         } else {
-            st.selectMode = true
+            st.selectedSongs.add(song)
         }
     }
 
@@ -421,37 +457,23 @@ private fun SingerDetailContent(
         )
     }
 
-    suspend fun batchDownload(quality: Quality) {
-        st.batchPickerVisible = false
-        // 不再置 batchDownloading：详情页不展示下载进度，也不把「下载全部」按钮变灰/禁用。
-        // （字段保留只为兼容既有引用；按钮任何时候都可点，同一首也可反复下载。）
-        val songs = st.selectedSongs.toList()
-        // 面板给的是整批并集：逐首夹到它真实可用的最高档
-        for (s in songs) downloadViewModel.addTask(s, downloadQualityFor(s, quality))
-        for ((i, song) in songs.withIndex()) {
-            // 只补 UI 进度文案（下载流程本身与原来一致）
-            st.batchProgress = "${i + 1}/${songs.size} ${song.title}"
-            // 前置预备：把后面两首的清单请求提前打掉（Apple session 串行，只能靠重叠）
-            ApplePrefetch.ahead(songs.drop(i + 1), quality)
-            downloadOneAndRegister(
-                downloadViewModel = downloadViewModel,
-                playerViewModel = playerViewModel,
-                song = song,
-                quality = downloadQualityFor(song, quality),
-                meta = DownloadMeta(
-                    albumArtist = song.albumArtist ?: artistName,
-                    composer = song.composer,
-                    genre = song.genre,
-                    isrc = song.isrc,
-                ),
-                onProgress = { p -> downloadViewModel.updateProgress(song.id, (p * 100).coerceIn(0.0, 100.0)) },
-            )
-        }
-        ApplePrefetch.drain()
-        st.batchDownloading = false
-        st.batchProgress = ""
-        st.selectedSongs.clear()
-        st.selectMode = false
+    /**
+     * 打开「多选操作」抽屉（宿主渲染）。
+     *
+     * 页面只交出快照，下载 / 加入到歌单都由 `AppShell` 执行；动作做完由宿主回调
+     * [SingerDetailCacheState.clearSelection] 收尾。
+     */
+    fun openMultiSelectSheet() {
+        if (st.selectedSongs.isEmpty()) return
+        uiViewModel.openMultiSelectSheet(
+            MultiSelectSheetState(
+                songs = st.selectedSongs.toList(),
+                scope = PlaylistScope.online,
+                origin = MultiSelectOrigin.ArtistSongs,
+                artistPlatform = data.platform,
+                artistId = data.id,
+            ),
+        )
     }
 
     // 首帧只拉「本页 + 公共头图」需要的东西；缓存里已有的不重复拉
@@ -460,6 +482,7 @@ private fun SingerDetailContent(
         coroutineScope {
             launch { if (st.avatarUrl.isEmpty()) loadAvatarIfNeeded() }
             launch { loadBioIfNeeded() }
+            launch { loadMotionIfNeeded() }
             when (page) {
                 SingerDetailPage.overview -> {
                     // 本页只要「最热门 前几首」+「专辑横滑」—— **绝不续拉全量**
@@ -546,102 +569,17 @@ private fun SingerDetailContent(
             // ── 背景：跟随**歌手自己的封面**的氛围色（LunaBeat 规则），不跟正在播放的歌曲。
             //    头像优先用已解析的 avatarUrl，回落到后端给的 data.picture。
             val singerCoverUrl = st.avatarUrl.ifEmpty { data.picture }
+            val singerPalette = rememberCoverPalette(singerCoverUrl)
+            PageTintEffect(uiViewModel, singerPalette, coverUrl = singerCoverUrl)
             CoverPaletteBackdrop(
                 coverUrl = singerCoverUrl,
-                palette = rememberCoverPalette(singerCoverUrl),
+                palette = singerPalette,
                 modifier = Modifier.fillMaxSize(),
             )
-            Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
-                SingerDetailHeader(
-                    // 多选入口只在「全部单曲」页出现（专辑页没有歌曲可选）
-                    showSelectEntry = page == SingerDetailPage.songs,
-                    selectMode = page == SingerDetailPage.songs && st.selectMode,
-                    onClose = { requestClose() },
-                    onToggleSelectMode = { toggleSelectMode() },
-                    title = when (page) {
-                        SingerDetailPage.songs -> "全部单曲"
-                        SingerDetailPage.albums -> "全部专辑"
-                        SingerDetailPage.overview -> "歌手详情"
-                    },
-                    // 续拉期间跟着列表一起长，拉完就是真总数
-                    titleCount = if (page == SingerDetailPage.songs && st.songs.isNotEmpty()) {
-                        "${maxOf(st.songTotal, st.songs.size)} 首"
-                    } else {
-                        null
-                    },
-                )
-                if (page == SingerDetailPage.songs && st.selectMode) {
-                    // 待下载选择条（对齐 Dart `_selectionBar`）：数量徽标 + 「待下载歌曲」+
-                    // 清空 + 下载全部。样式与新的视觉语言一致（玻璃条 + 主色动作按钮），
-                    // 进度文案沿用 `st.batchProgress`（形如 `3/12 歌名`）。
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(start = AppSpacing.sp16, end = AppSpacing.sp16, bottom = AppSpacing.sp8)
-                            .glassPanel(RoundedCornerShape(AppRadius.panel), elevated = false)
-                            .padding(vertical = AppSpacing.sp10, horizontal = AppSpacing.sp14),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .size(AppSpacing.sp22)
-                                .clip(CircleShape)
-                                .background(AppColors.primary),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "${st.selectedSongs.size}",
-                                color = AppColors.white,
-                                fontSize = AppFontSize.xs,
-                                fontWeight = FontWeight.Bold,
-                            )
-                        }
-                        Spacer(modifier = Modifier.width(AppSpacing.sp6))
-                        Text(
-                            text = "待下载歌曲",
-                            modifier = Modifier.weight(1f),
-                            color = AppColors.white70,
-                            fontSize = AppFontSize.size13,
-                            fontWeight = FontWeight.Medium,
-                        )
-                        Box(
-                            modifier = Modifier
-                                .clickableRipple { st.selectedSongs.clear() }
-                                .padding(AppSpacing.sp4),
-                        ) {
-                            Text(text = "清空", color = AppColors.textTertiary, fontSize = AppFontSize.sm)
-                        }
-                        Spacer(modifier = Modifier.width(AppSpacing.sp8))
-                        Box(
-                            modifier = Modifier
-                                .graphicsLayer { alpha = if (st.batchDownloading) 0.5f else 1f }
-                                .clip(RoundedCornerShape(AppRadius.r10))
-                                .background(AppColors.primary)
-                                .then(
-                                    if (st.batchDownloading) {
-                                        Modifier
-                                    } else {
-                                        Modifier.clickableRipple { st.batchPickerVisible = true }
-                                    },
-                                )
-                                .padding(vertical = AppSpacing.sp8, horizontal = AppSpacing.sp16),
-                        ) {
-                            Text(
-                                text = when {
-                                    st.batchDownloading && st.batchProgress.isNotEmpty() -> st.batchProgress
-                                    st.batchDownloading -> "下载中..."
-                                    else -> "下载全部"
-                                },
-                                color = AppColors.white,
-                                fontSize = AppFontSize.sm,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                    }
-                }
-                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                    // 页内不再切 tab：每一页是一次压栈（`SingerRoute` / `SingerSongsRoute` /
-                    // `SingerAlbumsRoute`），进出场由本页自己的 slide 负责。
+            val heroListState = rememberLazyListState()
+            val density = LocalDensity.current
+            var barBottomPx by remember { mutableStateOf(0) }
+            Box(modifier = Modifier.fillMaxSize()) {
                     when (page) {
                         SingerDetailPage.overview -> SingerDetailOverview(
                             st = st,
@@ -649,79 +587,68 @@ private fun SingerDetailContent(
                             artistName = artistName,
                             apple = data.platform == MusicPlatform.apple,
                             activeSongId = playerState.currentSong?.id,
+                            listState = heroListState,
+                            barBottomPx = barBottomPx,
                             onPlay = { scope.launch { playSong(it) } },
                             onDownload = { uiViewModel.setSongActionsVisible(true, it) },
                             onOpenAlbum = { openAlbum(it) },
                             onSeeAllSongs = onOpenSongs,
-                            onSeeAllSingles = { onOpenAlbums(AppleReleaseSection.singles) },
-                            onSeeAllAlbums = {
-                                onOpenAlbums(
-                                    if (data.platform == MusicPlatform.apple) {
-                                        AppleReleaseSection.albums
-                                    } else {
-                                        null
-                                    },
-                                )
-                            },
+                            onSeeAllSingles = { onOpenAlbums(AlbumGroup.singlesEps) },
+                            onSeeAllAlbums = { onOpenAlbums(AlbumGroup.albums) },
                         )
 
-                        SingerDetailPage.songs -> SingerDetailSongs(
-                            st = st,
-                            tasks = tasks,
-                            activeSongId = playerState.currentSong?.id,
-                            onPlay = { scope.launch { playSong(it) } },
-                            onDownload = { uiViewModel.setSongActionsVisible(true, it) },
-                            onToggle = { toggleSelect(it) },
-                        )
+                        SingerDetailPage.songs -> Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(top = with(density) { barBottomPx.toDp() }),
+                        ) {
+                            SingerDetailSongs(
+                                st = st,
+                                tasks = tasks,
+                                activeSongId = playerState.currentSong?.id,
+                                onPlay = { scope.launch { playSong(it) } },
+                                onDownload = { uiViewModel.setSongActionsVisible(true, it) },
+                                onToggle = { toggleSelect(it) },
+                            )
+                        }
 
-                        SingerDetailPage.albums -> SingerDetailAlbums(
-                            st = st,
-                            apple = data.platform == MusicPlatform.apple,
-                            filter = albumSection,
-                            onSortToggle = { st.albumSortAsc = !st.albumSortAsc },
-                            onOpenAlbum = { openAlbum(it) },
-                        )
+                        SingerDetailPage.albums -> Box(
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(top = with(density) { barBottomPx.toDp() }),
+                        ) {
+                            SingerDetailAlbums(
+                                st = st,
+                                apple = data.platform == MusicPlatform.apple,
+                                filter = albumSection,
+                                onSortToggle = { st.albumSortAsc = !st.albumSortAsc },
+                                onOpenAlbum = { openAlbum(it) },
+                            )
+                        }
                     }
-                }
-            }
-        }
-
-        // ── 音质选择器（单曲 / 批量，复用 QualityPickerSheet） ──
-        // 面板内容交给 AppShell 在「迷你播放条之上」渲染（见 DetailQualityPickerHost 注释）；
-        // 无宿主时退化为内联渲染，行为不变。
-        val pickerHost = LocalDetailQualityPickerHost.current
-        val pickerOwner = remember { Any() }
-        val pickerPanel: @Composable () -> Unit = {
-            QualityPickerSheet(
-                visible = st.batchPickerVisible,
-                qualities = batchDownloadQualities(st.selectedSongs.toList()),
-                sizeOf = { q ->
-                    if (st.selectedSongs.size == 1) st.selectedSongs.first().qualitySizes[q] else null
-                },
-                labelOf = { q -> playQualityLabelOf(data.platform, q) },
-                    onSelect = { q ->
-                        // 跑在全局串行队列上（同 AlbumDetailSheet）：弹窗一关作用域就作废
-                        enqueueDownload("singerSheet_batch_" + System.currentTimeMillis()) { batchDownload(q) }
-                    },
-                onCancel = { st.batchPickerVisible = false },
-            )
-        }
-        if (pickerHost == null) {
-            pickerPanel()
-        } else {
-            // **可见性必须在组合期读一次**。`SideEffect` 块里的读取不建立组合依赖：
-            // 只在块里读的话，`batchPickerVisible` 从 false 变 true 不会让本页重组 →
-            // `SideEffect` 不重跑 → 槽位永远不写 → 第一次点下载什么都不弹，
-            // 要等下一次无关重组（例如退出多选）才把面板「迟到」地挂上去。
-            val pickerOpen = st.batchPickerVisible
-            // 只在面板打开时抢占槽位；关闭时不写，保留内容让面板自带淡出动画播完。
-            SideEffect {
-                if (pickerOpen) {
-                    pickerHost.show(pickerOwner, pickerPanel)
-                }
-            }
-            DisposableEffect(pickerOwner) {
-                onDispose { pickerHost.clear(pickerOwner) }
+                    DetailTopBar(
+                        onClose = { requestClose() },
+                        title = when (page) {
+                            SingerDetailPage.songs -> "全部单曲"
+                            SingerDetailPage.albums -> "全部专辑"
+                            SingerDetailPage.overview -> null
+                        },
+                        count = if (page != SingerDetailPage.songs || st.songs.isEmpty()) {
+                            null
+                        } else {
+                            "${maxOf(st.songTotal, st.songs.size)} 首"
+                        },
+                        actions = {
+                            MultiSelectHeaderActions(
+                                count = if (page == SingerDetailPage.songs) st.selectedSongs.size else 0,
+                                onClear = { st.clearSelection() },
+                                onOpenActions = { openMultiSelectSheet() },
+                            )
+                        },
+                        modifier = Modifier
+                            .align(Alignment.TopCenter)
+                            .onSizeChanged { barBottomPx = it.height },
+                    )
             }
         }
     }
@@ -731,73 +658,9 @@ private fun SingerDetailContent(
 // 头部与信息区
 // ================================================================================================
 
-/**
- * 返回条：chevron_left 22 +（多选态）多选 / 取消。
- *
- * 与专辑详情同款：都是纯文字主色按钮（不用玻璃 chip），多选入口只在「全部歌曲」子页出现。
- */
-@Composable
-private fun SingerDetailHeader(
-    selectMode: Boolean,
-    showSelectEntry: Boolean,
-    onClose: () -> Unit,
-    onToggleSelectMode: () -> Unit,
-    title: String? = null,
-    titleCount: String? = null,
-) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(start = AppSpacing.sp12, end = AppSpacing.sp12, top = AppSpacing.sp40, bottom = AppSpacing.sp4),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .clickableRipple(onClose)
-                .padding(AppSpacing.sp4),
-            contentAlignment = Alignment.Center,
-        ) {
-            SingerDetailChevronLeft(modifier = Modifier.size(AppIconSize.icon22), tint = AppColors.textSecondary)
-        }
-        if (!title.isNullOrEmpty()) {
-            Spacer(modifier = Modifier.width(AppSpacing.sp8))
-            Text(
-                text = title,
-                modifier = Modifier.weight(1f, fill = false),
-                color = AppColors.textPrimary,
-                fontSize = AppFontSize.size17,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (!titleCount.isNullOrEmpty()) {
-                Spacer(modifier = Modifier.width(AppSpacing.sp6))
-                Text(
-                    text = titleCount,
-                    color = AppColors.whiteA40,
-                    fontSize = AppFontSize.size13,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                )
-            }
-        }
-        Spacer(modifier = Modifier.weight(1f))
-        if (showSelectEntry) {
-            Box(
-                modifier = Modifier
-                    .clickableRipple(onToggleSelectMode)
-                    .padding(AppSpacing.sp4),
-            ) {
-                Text(
-                    text = if (selectMode) "取消" else "多选",
-                    color = AppColors.primary,
-                    fontSize = AppFontSize.size13,
-                    fontWeight = FontWeight.Medium,
-                )
-            }
-        }
-    }
-}
+private const val SINGLES_EPS_TITLE = "单曲 / EP"
+
+private const val ALBUMS_TITLE = "专辑"
 
 /** overview 横向专辑卡尺寸（高 = 宽 + 文字区，与 [SingerDetailAlbums] 网格同比例） */
 private val SingerDetailAlbumCardWidth = 140.dp
@@ -829,6 +692,8 @@ private fun SingerDetailOverview(
     onSeeAllSongs: () -> Unit,
     onSeeAllSingles: () -> Unit,
     onSeeAllAlbums: () -> Unit,
+    listState: LazyListState,
+    barBottomPx: Int,
 ) {
     // 「专辑」段只展示最近的若干张（按 pub 倒序，空值排最后）；Apple 两段也各只放预览
     val recentAlbums = remember(st.albums, apple) {
@@ -844,22 +709,74 @@ private fun SingerDetailOverview(
     val appleAlbums = remember(st.appleAlbums) {
         st.appleAlbums.sortedByDescending { it.pub }.take(SingerDetailOverviewAlbumCount)
     }
-    val overviewListState = rememberLazyListState()
-    LazyColumn(
-        state = overviewListState,
-        modifier = Modifier.fillMaxSize().shortScrollbar(overviewListState),
-        contentPadding = PaddingValues(bottom = AppSpacing.listBottomInset),
-    ) {
-        item {
-            SingerDetailHero(
-                name = artistName,
-                avatarUrl = st.avatarUrl.ifEmpty { data.picture },
-                avatarKey = data.id,
-                bio = st.bio,
-                platform = data.platform,
-                onPlayAll = { st.songs.firstOrNull()?.let(onPlay) },
-                playEnabled = st.songs.isNotEmpty(),
-            )
+    val grouped = remember(st.albums) {
+        val sorted = st.albums.sortedByDescending { it.pub }
+        val singles = sorted.filter {
+            it.albumKind() == ALBUM_KIND_SINGLE || it.albumKind() == ALBUM_KIND_EP
+        }
+        val albums = sorted.filter {
+            it.albumKind() == ALBUM_KIND_ALBUM || it.albumKind() == null
+        }
+        singles.take(SingerDetailOverviewAlbumCount) to albums.take(SingerDetailOverviewAlbumCount)
+    }
+    val singlesShelf = if (apple) appleSingles else grouped.first
+    val albumsShelf = if (apple) appleAlbums else grouped.second
+    val latestRelease = remember(apple, st.albums, st.appleSingles, st.appleAlbums) {
+        val pool = if (apple) st.appleSingles + st.appleAlbums else st.albums
+        pool.filter { it.pub.isNotBlank() }.maxByOrNull { it.pub }
+    }
+    val overviewListState = listState
+    Box(modifier = Modifier.fillMaxSize().clipToBounds()) {
+        MotionHeroScaffold(
+            aspectRatio = 0.92f,
+            barBottomPx = barBottomPx,
+            listState = overviewListState,
+            bottomInset = AppSpacing.listBottomInset,
+            video = {
+                SingerDetailHeroVideo(
+                    avatarUrl = st.avatarUrl.ifEmpty { data.picture },
+                    motionCover = st.motionCover,
+                )
+            },
+            foreground = {
+                SingerDetailHero(
+                    name = artistName,
+                    avatarKey = data.id,
+                    platform = data.platform,
+                    onPlayAll = { st.songs.firstOrNull()?.let(onPlay) },
+                    playEnabled = st.songs.isNotEmpty(),
+                    onShuffleAll = { st.songs.randomOrNull()?.let(onPlay) },
+                    avatarUrl = st.avatarUrl.ifEmpty { data.picture },
+                )
+            },
+        ) {
+            if (latestRelease != null) {
+            item(key = "latest-release") {
+                val favoriteViewModel: FavoriteViewModel = activityViewModel()
+                val trackCount = latestRelease.musiccnt.toIntOrNull() ?: 0
+                val coverUrl = buildAlbumCoverUrl(latestRelease)
+                LatestReleaseCard(
+                    cover = coverUrl.ifEmpty { null },
+                    dateText = latestReleaseDateText(latestRelease.pub),
+                    title = latestReleaseTitle(
+                        latestRelease.name,
+                        latestRelease.albumKind().orEmpty(),
+                    ),
+                    countText = latestReleaseTrackCountText(trackCount),
+                    onClick = { onOpenAlbum(latestRelease) },
+                    onAdd = {
+                        favoriteViewModel.toggleAlbum(
+                            platform = data.platform,
+                            albumId = latestRelease.albumid,
+                            name = latestRelease.name,
+                            artist = latestRelease.artist,
+                            cover = coverUrl,
+                            trackCount = trackCount,
+                            releaseDate = latestRelease.pub,
+                        )
+                    },
+                )
+            }
         }
         // 「全部」**恒定出现**（只要这一段有内容）：一首歌 / 一张专辑也能进去看，
         // 那里有排序与完整信息；预览段装得下就不给入口的旧规则会让「全部」变得不可预期。
@@ -897,74 +814,36 @@ private fun SingerDetailOverview(
                 )
             }
         }
-        if (apple) {
-            if (appleSingles.isNotEmpty()) {
-                item {
-                    SingerDetailSectionHeader(
-                        title = "单曲 / EP",
-                        onSeeAll = if (appleSingles.isEmpty()) null else onSeeAllSingles,
-                    )
-                }
-                item {
-                    SingerDetailReleaseShelf(
-                        albums = appleSingles,
-                        loading = st.albumLoading,
-                        onOpenAlbum = onOpenAlbum,
-                    )
-                }
-            }
-            if (appleAlbums.isNotEmpty()) {
-                item {
-                    SingerDetailSectionHeader(
-                        title = "专辑",
-                        onSeeAll = if (appleAlbums.isEmpty()) null else onSeeAllAlbums,
-                    )
-                }
-                item {
-                    SingerDetailReleaseShelf(
-                        albums = appleAlbums,
-                        loading = st.albumLoading,
-                        onOpenAlbum = onOpenAlbum,
-                    )
-                }
-            }
-        } else {
+        if (singlesShelf.isNotEmpty()) {
             item {
                 SingerDetailSectionHeader(
-                    title = "专辑",
-                    onSeeAll = if (recentAlbums.isEmpty()) null else onSeeAllAlbums,
+                    title = "单曲 / EP",
+                    onSeeAll = onSeeAllSingles,
                 )
             }
             item {
-                if (st.albumLoading && recentAlbums.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxWidth().height(SingerDetailAlbumCardHeight),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        CircularProgressIndicator(
-                            modifier = Modifier.size(AppIconSize.icon24),
-                            color = AppColors.primary,
-                        )
-                    }
-                } else {
-                    LazyRow(
-                        contentPadding = PaddingValues(horizontal = AppSpacing.sp16),
-                        horizontalArrangement = Arrangement.spacedBy(AppSpacing.sp10),
-                    ) {
-                        items(count = recentAlbums.size) { i ->
-                            val album = recentAlbums[i]
-                            SingerDetailAlbumCard(
-                                album = album,
-                                coverUrl = buildAlbumCoverUrl(album),
-                                modifier = Modifier
-                                    .width(SingerDetailAlbumCardWidth)
-                                    .height(SingerDetailAlbumCardHeight),
-                                onTap = onOpenAlbum,
-                            )
-                        }
-                    }
-                }
+                SingerDetailReleaseShelf(
+                    albums = singlesShelf,
+                    loading = st.albumLoading,
+                    onOpenAlbum = onOpenAlbum,
+                )
             }
+        }
+        if (albumsShelf.isNotEmpty()) {
+            item {
+                SingerDetailSectionHeader(
+                    title = "专辑",
+                    onSeeAll = onSeeAllAlbums,
+                )
+            }
+            item {
+                SingerDetailReleaseShelf(
+                    albums = albumsShelf,
+                    loading = st.albumLoading,
+                    onOpenAlbum = onOpenAlbum,
+                )
+            }
+        }
         }
     }
 }
@@ -1007,14 +886,62 @@ private fun SingerDetailReleaseShelf(
 
 /** overview 头部：正圆大头像（约 55% 屏宽）+ 居中艺人名 +「Artist」+ 播放胶囊 */
 @Composable
+private fun SingerDetailHeroVideo(
+    avatarUrl: String,
+    motionCover: String,
+) {
+    var avatarFailed by remember(avatarUrl) { mutableStateOf(false) }
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to Color.Black,
+                        0.62f to Color.Black,
+                        0.86f to Color.Black.copy(alpha = 0.55f),
+                        1f to Color.Transparent,
+                    ),
+                    blendMode = BlendMode.DstIn,
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (motionCover.isNotEmpty()) {
+            PlaylistMotionCover(
+                videoUrl = motionCover,
+                previewUrl = avatarUrl,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else if (avatarUrl.isEmpty() || avatarFailed) {
+            SingerDetailPersonOutline(
+                modifier = Modifier.size(AppIconSize.icon48),
+                tint = AppColors.textDisabled,
+            )
+        } else {
+            AsyncImage(
+                model = avatarUrl,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                onError = { avatarFailed = true },
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
+@Composable
 private fun SingerDetailHero(
     name: String,
-    avatarUrl: String,
     avatarKey: String,
-    bio: String,
     platform: MusicPlatform,
     onPlayAll: () -> Unit,
     playEnabled: Boolean,
+    onShuffleAll: (() -> Unit)? = null,
+    avatarUrl: String = "",
+    modifier: Modifier = Modifier,
 ) {
     // 收藏状态就地取（Activity 作用域 VM），不穿透列表层
     val favoriteViewModel: FavoriteViewModel = activityViewModel()
@@ -1025,81 +952,51 @@ private fun SingerDetailHero(
     val favorited = remember(favoriteSnapshot, favoriteKey) {
         favoriteViewModel.isArtistFavorite(favoriteKey)
     }
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(horizontal = AppSpacing.sp24, vertical = AppSpacing.sp20),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        var avatarFailed by remember(avatarKey, avatarUrl) { mutableStateOf(false) }
-        Box(
-            modifier = Modifier
-                .fillMaxWidth(0.55f)
-                .aspectRatio(1f)
-                .clip(CircleShape)
-                .background(AppColors.whiteA03),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (avatarUrl.isEmpty() || avatarFailed) {
-                SingerDetailPersonOutline(
-                    modifier = Modifier.size(AppIconSize.icon48),
-                    tint = AppColors.textDisabled,
+    Column(modifier = modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.fillMaxWidth().aspectRatio(0.92f)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0.42f to Color.Transparent,
+                            0.70f to Color.Black.copy(alpha = 0.34f),
+                            0.90f to Color.Black.copy(alpha = 0.28f),
+                            1f to Color.Transparent,
+                        ),
+                    ),
+            )
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = AppSpacing.sp24, vertical = AppSpacing.sp16),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = name,
+                    color = AppColors.textPrimary,
+                    fontSize = AppFontSize.size26,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
                 )
-            } else {
-                AsyncImage(
-                    model = avatarUrl,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    onError = { avatarFailed = true },
-                    modifier = Modifier.fillMaxSize(),
+                Spacer(modifier = Modifier.height(AppSpacing.sp4))
+                Text(
+                    text = "歌手",
+                    color = AppColors.whiteA50,
+                    fontSize = AppFontSize.size13,
+                    textAlign = TextAlign.Center,
                 )
             }
         }
-        Spacer(modifier = Modifier.height(AppSpacing.sp16))
-        Text(
-            text = name,
-            color = AppColors.textPrimary,
-            fontSize = AppFontSize.size26,
-            fontWeight = FontWeight.Bold,
-            textAlign = TextAlign.Center,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Spacer(modifier = Modifier.height(AppSpacing.sp4))
-        Text(
-            text = "歌手",
-            color = AppColors.whiteA50,
-            fontSize = AppFontSize.size13,
-            textAlign = TextAlign.Center,
-        )
-        if (bio.isNotEmpty()) {
-            Spacer(modifier = Modifier.height(AppSpacing.sp8))
-            var bioExpanded by remember(avatarKey) { mutableStateOf(false) }
-            Text(
-                text = bio,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickableRipple { bioExpanded = !bioExpanded },
-                color = AppColors.white70,
-                fontSize = AppFontSize.size13,
-                textAlign = TextAlign.Center,
-                maxLines = if (bioExpanded) Int.MAX_VALUE else 2,
-                overflow = TextOverflow.Ellipsis,
-            )
-            Spacer(modifier = Modifier.height(AppSpacing.sp2))
-            Text(
-                text = if (bioExpanded) "收起" else "更多",
-                modifier = Modifier
-                    .clip(RoundedCornerShape(percent = 50))
-                    .clickableRipple { bioExpanded = !bioExpanded }
-                    .padding(horizontal = AppSpacing.sp12, vertical = AppSpacing.sp2),
-                color = AppColors.primary,
-                fontSize = AppFontSize.size13,
-                fontWeight = FontWeight.Medium,
-            )
-        }
-        Spacer(modifier = Modifier.height(AppSpacing.sp16))
-        Row(verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = AppSpacing.sp16),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             DetailHeartButton(
                 selected = favorited,
                 onClick = {
@@ -1113,6 +1010,17 @@ private fun SingerDetailHero(
             )
             Spacer(modifier = Modifier.width(AppSpacing.sp16))
             DetailPlayAllPill(onClick = onPlayAll, enabled = playEnabled)
+            if (onShuffleAll != null) {
+                Spacer(modifier = Modifier.width(AppSpacing.sp16))
+                DetailRoundIconButton(onClick = onShuffleAll, enabled = playEnabled) { tint ->
+                    Icon(
+                        painter = painterResource(R.drawable.ic_action_shuffle),
+                        contentDescription = "随机播放",
+                        tint = tint,
+                        modifier = Modifier.size(AppIconSize.icon22),
+                    )
+                }
+            }
         }
     }
 }
@@ -1131,69 +1039,29 @@ private fun SingerDetailSectionHeader(title: String, onSeeAll: (() -> Unit)? = n
             .padding(start = AppSpacing.sp16, end = AppSpacing.sp16, top = AppSpacing.sp16, bottom = AppSpacing.sp8),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = title,
-            modifier = Modifier.weight(1f),
-            color = AppColors.textPrimary,
-            fontSize = AppFontSize.size20,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (onSeeAll != null) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(percent = 50))
-                    .background(AppColors.whiteA06)
-                    .clickableRipple(onSeeAll)
-                    .padding(horizontal = AppSpacing.sp12, vertical = AppSpacing.sp6),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(text = "全部", color = AppColors.white70, fontSize = AppFontSize.xs)
-                Spacer(modifier = Modifier.width(AppSpacing.sp2))
+        Row(
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .then(if (onSeeAll != null) Modifier.clickableRipple(onSeeAll) else Modifier),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                modifier = Modifier.weight(1f, fill = false),
+                color = AppColors.textPrimary,
+                fontSize = AppFontSize.size20,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (onSeeAll != null) {
+                Spacer(modifier = Modifier.width(AppSpacing.sp6))
                 SingerDetailChevronRight(
-                    modifier = Modifier.size(AppIconSize.icon13),
-                    tint = AppColors.glyphStrong,
+                    modifier = Modifier.size(AppIconSize.icon16),
+                    tint = AppColors.whiteA50,
                 )
             }
         }
-    }
-}
-
-/**
- * 音质角标（歌曲行用）。
- *
- * Apple 只标两类特殊规格，且可以同时出现：高解析无损 → `Hi-Res`、Dolby Atmos → `Dolby`；
- * 两者都没有（普通 ALAC / AAC）就不渲染角标。其它平台沿用原行为：无损类统一标 `Hi-Res`。
- */
-private fun SingerDetailQualityBadges(song: Song): List<String> =
-    if (song.platform == MusicPlatform.apple) {
-        buildList {
-            if (Quality.hires in song.qualities) add("Hi-Res")
-            if (Quality.atmos in song.qualities) add("Dolby")
-        }
-    } else {
-        if (song.qualities.any {
-                it == Quality.hires || it == Quality.atmos || it == Quality.alac
-            }
-        ) {
-            listOf("Hi-Res")
-        } else {
-            emptyList()
-        }
-    }
-
-/** 音质角标（单个文案；Apple 的歌曲行最多渲染两个：Hi-Res / Dolby） */
-@Composable
-private fun SingerDetailQualityBadge(label: String, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(percent = 25))
-            .background(AppColors.primaryA15)
-            .padding(horizontal = AppSpacing.sp4, vertical = 1.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(text = label, color = AppColors.primary, fontSize = AppFontSize.size10)
     }
 }
 
@@ -1360,9 +1228,20 @@ private fun SingerDetailSongRow(
 
     // 以专辑详情行为基准对齐：右侧预留 sp16（与专辑行 padding 一致），
     // 并让下载按钮在整个行高内垂直居中（原先默认顶对齐，视觉偏上）。
+    //
+    // 选中 / 正在播放的高亮画在**整行**（含行尾的 ♥ · ⋮ / 勾选框）：
+    // 画在内层内容盒上时，行尾那两个按钮不在高亮范围内，看起来「只选了一半」。
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .then(
+                when {
+                    // 竖条贴行左边界（内缩 2dp），与封面之间留出 10dp 空隙
+                    isActive -> Modifier.playingRowBackground(tint = playingTint, startInset = 2.dp)
+                    selected -> Modifier.background(AppColors.primaryA08)
+                    else -> Modifier
+                },
+            )
             .padding(end = trailingSpace),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -1370,14 +1249,6 @@ private fun SingerDetailSongRow(
             modifier = Modifier
                 .weight(1f)
                 .height(AppSize.detailRowHeight)
-                .then(
-                    when {
-                        // 竖条贴行左边界（内缩 2dp），与封面之间留出 10dp 空隙
-                        isActive -> Modifier.playingRowBackground(tint = playingTint, startInset = 2.dp)
-                        selected -> Modifier.background(AppColors.primaryA08)
-                        else -> Modifier
-                    },
-                )
                 .combinedClickableNoRipple(
                     onTap = { if (selectionMode) onToggle(song) else onPlay(song) },
                     onLongClick = {
@@ -1417,7 +1288,7 @@ private fun SingerDetailSongRow(
                     Spacer(modifier = Modifier.width(AppSpacing.sp8))
                 }
                 Box(contentAlignment = Alignment.Center) {
-                    SingerDetailCover(song = song)
+                    SongRowCoverArt(coverUrl = song.cover)
                     if (isActive && !showIndex) {
                         // 序号列不显示时，等化器叠在封面中心（46% 黑罩保证看得清）
                         Box(
@@ -1452,62 +1323,18 @@ private fun SingerDetailSongRow(
                         overflow = TextOverflow.Ellipsis,
                     )
                 }
-                for (badge in SingerDetailQualityBadges(song)) {
-                    Spacer(modifier = Modifier.width(AppSpacing.sp4))
-                    SingerDetailQualityBadge(label = badge)
-                }
             }
         }
 
         // 行尾槽位：多选态 = 勾选框；常态 = 下载中环 / ⋮
         if (selectionMode) {
             SelectCheckBox(checked = selected, onToggle = { onToggle(song) })
-        } else if (isDownloading) {
-            Box(
-                modifier = Modifier.padding(AppSpacing.sp4),
-                contentAlignment = Alignment.Center,
-            ) {
-                CircularProgressIndicator(
-                    modifier = Modifier.size(14.dp),
-                    color = AppColors.primary,
-                    strokeWidth = 2.dp,
-                )
-            }
         } else {
-            // 命中区与多选勾选框同位同宽（48dp）：切多选时文字区不横向跳一格
-            SongMoreButton(
-                onClick = { onDownload(song) },
-                modifier = Modifier.minimumInteractiveComponentSize(),
-            )
-        }
-    }
-}
-
-/**
- * 40dp 封面（圆角 6）。
- *
- * 「正在播放」的提示统一由序号列的等化器承担（与 `AlbumDetailSongRow` / `LocalSongRow`
- * 同一套），封面本身**不再压暗、不再叠三角** —— 之前那一套是本页独有的旧样式。
- */
-@Composable
-private fun SingerDetailCover(song: Song) {
-    Box(
-        modifier = Modifier
-            .size(AppSpacing.sp40)
-            .clip(RoundedCornerShape(AppRadius.r6))
-            .background(AppColors.whiteA03),
-        contentAlignment = Alignment.Center,
-    ) {
-        var coverFailed by remember(song.id) { mutableStateOf(false) }
-        if (song.cover.isEmpty() || coverFailed) {
-            SingerDetailMusicNote(modifier = Modifier.size(AppIconSize.icon16), tint = AppColors.whiteA15)
-        } else {
-            AsyncImage(
-                model = song.cover,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                onError = { coverFailed = true },
-                modifier = Modifier.fillMaxSize(),
+            // ♥ · ⋮：收藏状态由宿主经 `LocalSongLike` 注入；下载中 ⋮ 换旋转环
+            SongRowActions(
+                song = song,
+                onMore = { onDownload(song) },
+                downloading = isDownloading,
             )
         }
     }
@@ -1521,31 +1348,13 @@ private fun SingerDetailCover(song: Song) {
 private fun SingerDetailAlbums(
     st: SingerDetailCacheState,
     apple: Boolean,
-    filter: AppleReleaseSection?,
+    filter: AlbumGroup?,
     onSortToggle: () -> Unit,
     onOpenAlbum: (Album) -> Unit,
 ) {
     if (st.albumLoading) {
         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
             CircularProgressIndicator(color = AppColors.primary)
-        }
-        return
-    }
-    if (apple && filter == AppleReleaseSection.singles && st.appleSingles.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(text = "暂无单曲 / EP", color = AppColors.white30, fontSize = AppFontSize.base)
-        }
-        return
-    }
-    if (apple && filter == AppleReleaseSection.albums && st.appleAlbums.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(text = "暂无专辑", color = AppColors.white30, fontSize = AppFontSize.base)
-        }
-        return
-    }
-    if (st.albums.isEmpty()) {
-        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-            Text(text = "暂无专辑", color = AppColors.white30, fontSize = AppFontSize.base)
         }
         return
     }
@@ -1566,6 +1375,37 @@ private fun SingerDetailAlbums(
     val sorted = sortedAlbums(st.albums)
     val sortedSingles = sortedAlbums(st.appleSingles)
     val sortedAppleAlbums = sortedAlbums(st.appleAlbums)
+    val singlesAll = if (apple) {
+        sortedSingles
+    } else {
+        sorted.filter {
+            it.albumKind() == ALBUM_KIND_SINGLE || it.albumKind() == ALBUM_KIND_EP
+        }
+    }
+    val albumsAll = if (apple) {
+        sortedAppleAlbums
+    } else {
+        sorted.filter { it.albumKind() == ALBUM_KIND_ALBUM || it.albumKind() == null }
+    }
+    val visibleGroups = when (filter) {
+        AlbumGroup.singlesEps -> listOf(SINGLES_EPS_TITLE to singlesAll)
+        AlbumGroup.albums -> listOf(ALBUMS_TITLE to albumsAll)
+        null -> listOf(SINGLES_EPS_TITLE to singlesAll, ALBUMS_TITLE to albumsAll)
+    }.filter { it.second.isNotEmpty() }
+    if (visibleGroups.isEmpty()) {
+        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Text(
+                text = when (filter) {
+                    AlbumGroup.singlesEps -> "暂无单曲 / EP"
+                    AlbumGroup.albums -> "暂无专辑"
+                    null -> "暂无作品"
+                },
+                color = AppColors.white30,
+                fontSize = AppFontSize.base,
+            )
+        }
+        return
+    }
 
     Column(modifier = Modifier.fillMaxSize()) {
         // 时间正序 / 倒序切换
@@ -1610,39 +1450,13 @@ private fun SingerDetailAlbums(
                 verticalArrangement = Arrangement.spacedBy(AppSpacing.sp10),
                 horizontalArrangement = Arrangement.spacedBy(AppSpacing.sp10),
             ) {
-                if (apple) {
-                    if ((filter == null || filter == AppleReleaseSection.singles) &&
-                        sortedSingles.isNotEmpty()
-                    ) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            SingerDetailReleaseHeader("EP / 单曲")
-                        }
-                        items(items = sortedSingles, key = { it.albumid }) { album ->
-                            SingerDetailAlbumCard(
-                                album = album,
-                                coverUrl = buildAlbumCoverUrl(album),
-                                modifier = Modifier.height(cardHeight),
-                                onTap = onOpenAlbum,
-                            )
+                for ((title, group) in visibleGroups) {
+                    if (visibleGroups.size > 1) {
+                        item(span = { GridItemSpan(maxLineSpan) }, key = "hdr-$title") {
+                            SingerDetailReleaseHeader(title)
                         }
                     }
-                    if ((filter == null || filter == AppleReleaseSection.albums) &&
-                        sortedAppleAlbums.isNotEmpty()
-                    ) {
-                        item(span = { GridItemSpan(maxLineSpan) }) {
-                            SingerDetailReleaseHeader("专辑")
-                        }
-                        items(items = sortedAppleAlbums, key = { it.albumid }) { album ->
-                            SingerDetailAlbumCard(
-                                album = album,
-                                coverUrl = buildAlbumCoverUrl(album),
-                                modifier = Modifier.height(cardHeight),
-                                onTap = onOpenAlbum,
-                            )
-                        }
-                    }
-                } else {
-                    items(items = sorted, key = { it.albumid }) { album ->
+                    items(items = group, key = { it.albumid }) { album ->
                         SingerDetailAlbumCard(
                             album = album,
                             coverUrl = buildAlbumCoverUrl(album),
@@ -1728,6 +1542,16 @@ private fun SingerDetailAlbumCard(
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     // 曲目数：平台没给就不画（KKBOX 的专辑列表接口没有这个字段，
                     // 逐张 `v1/album` 去数不划算）。见 `AlbumSearchResults` 同一处注释。
+                    val kind = album.albumKind()
+                    if (kind != null) {
+                        Text(
+                            text = kind,
+                            color = AppColors.white70,
+                            fontSize = AppFontSize.size10,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Spacer(modifier = Modifier.width(AppSpacing.sp4))
+                    }
                     if (album.musiccnt.toIntOrNull()?.let { it > 0 } == true) {
                         SingerDetailMusicNote(modifier = Modifier.size(10.dp), tint = AppColors.glyphDim)
                         Spacer(modifier = Modifier.width(AppSpacing.sp4))

@@ -3,7 +3,6 @@ package com.annieplayer.annie_music.kt.data.sources.qq
 import com.annieplayer.annie_music.kt.data.model.Album
 import com.annieplayer.annie_music.kt.data.model.Artist
 import com.annieplayer.annie_music.kt.data.model.Song
-import com.annieplayer.annie_music.kt.data.network.httpPostJson
 
 // ================================================================================================
 // QQ 搜索（musicu `DoSearchForQQMusicMobile`，一个端点用 search_type 区分三类）
@@ -37,14 +36,10 @@ private suspend fun _fetchQQSearchRawPage(
                 "grp" to "1",
             ),
         ),
-        "comm" to mapOf(
-            "guid" to qqMusicuGuid,
-            "ct" to 19,
-            "cv" to 1914,
-        ),
+        "comm" to qqComm(),
     )
     return try {
-        val data = httpPostJson(qqMusicuUrl, qqHeaders, payload)
+        val data = qqMusicuPost(payload)
         val req0 = data["req_0"]
         val body = if (req0 is Map<*, *>) {
             val d = req0["data"]

@@ -1,57 +1,106 @@
 package com.annieplayer.annie_music.kt.core.audio
 
 import androidx.annotation.OptIn
-import androidx.media3.common.C
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.audio.AudioSink
 import java.nio.ByteBuffer
 
-/**
- * 系统混音通路（`AudioTrack` / AudioFlinger）作为一条 [OutputPort]。
- *
- * 只是薄壳：位置、时钟、暂停、结束判定**全部交给 Media3 的 `DefaultAudioSink` 自己算**。
- * 这里刻意不做任何记账 —— 内核路径已经有了 `AudioTrackPositionTracker`，
- * 我们再算一份就是第二个真相。
- *
- * 唯一带逻辑的一处是 [flush]：`DefaultAudioSink.flush()` 内部会 `audioTrack.pause()`，
- * 而恢复播放只有一条路径（renderer 的 BUFFERING→READY 迁移调 `play()`）。
- * 所以刷完必须按上游意图补一次 `play()`，否则 seek 到已缓冲位置会"没声但状态是 PLAYING"。
- */
 @OptIn(UnstableApi::class)
 internal class SystemOutput(
     private val sink: AudioSink,
+    private val deliveredUs: () -> Long,
+    private val nanoTime: () -> Long = System::nanoTime,
 ) : OutputPort {
 
-    override val path: OutputPath get() = OutputPath.systemMix
+    override val path: SinkKind get() = SinkKind.audioTrack
+
+    private var playing = false
+    private var lastOutUs = Long.MIN_VALUE
+    private var baseUs = 0L
+    private var baseDeliveredUs = 0L
+    private var needRebase = true
+    private var ringUs = RING_FALLBACK_US
+    private var wallUs = 0L
+    private var wallAtNs = 0L
 
     override fun write(
         buffer: ByteBuffer,
         presentationTimeUs: Long,
         encodedAccessUnitCount: Int,
-    ): Boolean = sink.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+    ): Boolean {
+        if (needRebase) rebaseTo(presentationTimeUs)
+        return sink.handleBuffer(buffer, presentationTimeUs, encodedAccessUnitCount)
+    }
 
-    override fun positionUs(sourceEnded: Boolean): Long = sink.getCurrentPositionUs(sourceEnded)
+    override fun positionUs(sourceEnded: Boolean): Long {
+        val raw = sink.getCurrentPositionUs(sourceEnded)
+        if (needRebase) {
+            if (raw <= 0L) return raw
+            rebaseTo(0L)
+        }
+        val ceilingUs = baseUs + (deliveredUs() - baseDeliveredUs)
+        if (sourceEnded) {
+            val held = if (lastOutUs == Long.MIN_VALUE) ceilingUs else lastOutUs
+            lastOutUs = maxOf(held, ceilingUs)
+            return lastOutUs
+        }
+        ringUs = refineRingUs(raw, ceilingUs, ringUs)
+        val now = nanoTime()
+        if (playing && wallAtNs != 0L) {
+            wallUs += (now - wallAtNs).coerceAtLeast(0L) / 1000L
+        }
+        wallAtNs = now
+        val out = composePositionUs(ceilingUs, ringUs, wallUs, lastOutUs)
+        lastOutUs = out
+        lastCorrectionMs = if (raw != 0L) (out - raw) / 1000L else 0L
+        return out
+    }
+
+    private fun rebaseTo(mediaUs: Long) {
+        baseUs = mediaUs
+        baseDeliveredUs = deliveredUs()
+        wallUs = mediaUs
+        wallAtNs = nanoTime()
+        needRebase = false
+    }
+
+    private fun dropClock() {
+        needRebase = true
+        lastOutUs = Long.MIN_VALUE
+        wallAtNs = 0L
+    }
 
     override fun play() {
+        playing = true
         sink.play()
     }
 
     override fun pause() {
+        playing = false
         sink.pause()
     }
 
     override fun flush(playRequested: Boolean) {
         sink.flush()
-        // 暂停中 seek 不会误播：那时 playRequested 是 false
+        dropClock()
+        playing = playRequested
         if (playRequested) sink.play()
+    }
+
+    override fun onTimelineDiscontinuity() {
+        sink.handleDiscontinuity()
     }
 
     override fun reset() {
         sink.reset()
+        dropClock()
+        playing = false
     }
 
     override fun release() {
         sink.release()
+        dropClock()
+        playing = false
     }
 
     override fun playToEndOfStream() {
@@ -62,6 +111,34 @@ internal class SystemOutput(
 
     override fun hasPendingData(): Boolean = sink.hasPendingData()
 
-    /** 系统通路的健康由 `AudioTrack` 自己管，这里没有可查的东西 */
     override fun isHealthy(): Boolean = true
+
+    internal companion object {
+        @Volatile
+        var lastCorrectionMs: Long = 0L
+            private set
+    }
+}
+
+internal const val RING_MIN_US = 50_000L
+internal const val RING_MAX_US = 2_000_000L
+internal const val RING_FALLBACK_US = 500_000L
+
+internal fun composePositionUs(
+    ceilingUs: Long,
+    ringUs: Long,
+    wallUs: Long,
+    floorUs: Long,
+): Long {
+    val natural = maxOf(ceilingUs - ringUs, wallUs)
+    val capped = minOf(ceilingUs, natural)
+    val floor = if (floorUs == Long.MIN_VALUE) 0L else floorUs
+    return maxOf(floor, capped)
+}
+
+internal fun refineRingUs(rawUs: Long, ceilingUs: Long, ringUs: Long): Long {
+    if (rawUs <= 0L) return ringUs
+    val estimate = ceilingUs - rawUs
+    if (estimate < RING_MIN_US || estimate > RING_MAX_US) return ringUs
+    return (ringUs * 7 + estimate) / 8
 }

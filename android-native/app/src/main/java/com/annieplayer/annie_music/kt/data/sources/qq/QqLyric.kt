@@ -66,15 +66,25 @@ private fun _qrcToLrcAndWords(qrc: String): Pair<String, String?> {
     return lrc.toString().trimEnd('\n') to (if (wl.isEmpty()) null else wl.toString().trimEnd('\n'))
 }
 
-/** QQ `trans` 字段（base64 翻译歌词） */
+/**
+ * QQ `trans` 字段（base64 翻译歌词）。
+ *
+ * 没有翻译的行是占位 `[00:14.39]//`（实测《淘金小镇》51 行里 40 多行如此）。
+ * **在这里就剔掉**：这份文本会进歌词缓存、写进文件标签、也直接给播放页，
+ * 源头清掉之后三条路都不必各自过滤一遍。
+ */
+private val _reTransPlaceholder by lazy { Regex("^\\[\\d{2}:\\d{2}\\.\\d{2,3}\\]\\s*/+\\s*$") }
+
 private fun _qqTrans(d: Map<*, *>?): String? {
     if (d == null || !jsTruthy(d["trans"])) return null
     val b64 = if (d["trans"] is String) d["trans"] as String else return null
-    return try {
+    val decoded = try {
         _decodeQQBase64(b64)
     } catch (_: Throwable) {
-        null
+        return null
     }
+    val kept = decoded.lines().filterNot { _reTransPlaceholder.matches(it.trim()) }
+    return kept.joinToString("\n").ifBlank { null }
 }
 
 /** 获取 QQ 歌词，返回原始 lrc、翻译歌词与逐字歌词；失败返回占位歌词 */
@@ -89,16 +99,9 @@ suspend fun fetchQQLyric(songId: String): QqLyric {
                 "method" to "GetPlayLyricInfo",
                 "param" to mapOf("songMID" to songMid, "crypt" to 0, "qrc" to qrc, "trans" to 1),
             ),
+            "comm" to qqComm(),
         )
-        val data = httpPostJson(
-            qqMusicuUrl,
-            body = payload,
-            headers = mapOf(
-                "User-Agent" to "okhttp/3.14.9",
-                "Content-Type" to "application/json; charset=utf-8",
-                "Cookie" to "tmeLoginType=-1;",
-            ),
-        )
+        val data = qqMusicuPost(payload)
         val reqRaw = data["request"]
         qqToMap(if (reqRaw is Map<*, *>) reqRaw["data"] else null)
     } catch (_: Throwable) {

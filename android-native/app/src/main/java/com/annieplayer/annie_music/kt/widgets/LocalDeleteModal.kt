@@ -86,6 +86,8 @@ fun LocalDeleteModal(
     onConfirm: (deleteFile: Boolean) -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    title: String = "删除歌曲",
+    subtitle: String = "将从本地曲库移除这首歌",
 ) {
     // 是否还挂在组合里：入场立刻 true，退场等动画结束才 false
     var rendered by remember { mutableStateOf(false) }
@@ -175,7 +177,7 @@ fun LocalDeleteModal(
                 }
                 Spacer(modifier = Modifier.height(AppSpacing.sp14))
                 Text(
-                    text = "删除歌曲",
+                    text = title,
                     modifier = Modifier.fillMaxWidth(),
                     color = AppColors.white,
                     fontSize = AppFontSize.xl,
@@ -184,7 +186,7 @@ fun LocalDeleteModal(
                 )
                 Spacer(modifier = Modifier.height(AppSpacing.sp6))
                 Text(
-                    text = "将从本地曲库移除这首歌",
+                    text = subtitle,
                     modifier = Modifier.fillMaxWidth(),
                     color = AppColors.white38,
                     fontSize = AppFontSize.xs,

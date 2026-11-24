@@ -28,6 +28,8 @@ import com.annieplayer.annie_music.kt.data.local.tag.TagMapper
 // enrichAppleSong / fetchAppleAlbumCopyright 与本文件同包（data.sources.apple），无需 import
 import com.annieplayer.annie_music.kt.data.sources.apple.wrapper.AppleWrapperApi
 import com.annieplayer.annie_music.kt.data.network.globalOkHttp
+import com.annieplayer.annie_music.kt.data.network.sharedConnectionPool
+import com.annieplayer.annie_music.kt.data.network.downloadDispatcher
 import java.io.BufferedOutputStream
 import java.io.IOException
 import java.io.OutputStream
@@ -86,11 +88,18 @@ object AppleDownloader {
     private const val SEGMENT_RETRY_DELAY_MS = 400L
 
     /**
-     * 下载专用 client：复用 [globalOkHttp] 的连接池/Dispatcher（`newBuilder()` 是复制配置，
-     * 连接池仍共享），只把读超时放宽到分片级别。
+     * 下载专用 client：**共享 [globalOkHttp] 的连接池，但用自己的 Dispatcher**。
+     *
+     * 一个 AM 下载任务就有 [SEGMENT_CONCURRENCY] 个并发分片。以前用
+     * `globalOkHttp.newBuilder()` 会把 Dispatcher 一起继承过来，于是下载自己就吃满
+     * `maxRequestsPerHost`，播放器的分片请求只能排队 —— 表现是「播着 AM 点下载另一首，
+     * 播放卡、下载也慢」。现在两者各有一份 Dispatcher：连接仍然复用（省 TLS 握手），
+     * 排队互不影响。
      */
     private val httpClient: OkHttpClient by lazy {
-        globalOkHttp.newBuilder()
+        OkHttpClient.Builder()
+            .connectionPool(sharedConnectionPool)
+            .dispatcher(downloadDispatcher())
             .connectTimeout(15, TimeUnit.SECONDS)
             .readTimeout(60, TimeUnit.SECONDS)
             .build()

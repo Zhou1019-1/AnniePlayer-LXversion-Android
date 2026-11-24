@@ -86,10 +86,9 @@ data class LocalTrackMeta(
     /**
      * 艺术家多值拆分，供按艺术家分组 / ⋮「跳转到歌手」使用。
      *
-     * 规则只有一份（[ArtistSplit]）：`; ； | , 、 + & ×`、`feat./ft./featuring/vs./with/w/`、
-     * 以及能判成「分隔」的 `/`（`AC/DC` 那种名字内部的斜杠不拆）。
-     * 以前这里手写 `split(';', '；', '/', '|')` —— `A feat. B`、`A & B`、`周杰伦、费玉清`
-     * 全被当成一整个艺术家。
+     * 规则只有一份（[ArtistSplit]），**只有两种分隔符**：带空格的 `/`，和 `、`。
+     * `& , ; | + × feat. ft. featuring vs. with and` 一律不拆 —— 真实歌手名里带 `&`
+     * （`Simon & Garfunkel`）的太多，宁可漏拆也不许把一个人拆成两个。
      */
     val artistNames: List<String>
         get() = ArtistSplit.split(artist)
@@ -99,8 +98,8 @@ data class LocalTrackMeta(
      *
      * 标签里的原始写法保留在 [artist]（那是文件里的真实内容），界面上一律用这个：
      * 列表行 / 详情面板 / 播放页 / 队列 / 下载文件名 / 打标都取它，
-     * 于是 `周杰伦、费玉清`、`A feat. B`、`A & B` 在界面上都是 `A / B`。
-     * 单歌手与 [artist] 完全相同（拆不开就原样）。
+     * 于是 `周杰伦、费玉清` 显示成 `周杰伦 / 费玉清`。
+     * 单歌手与 [artist] 完全相同（拆不开就原样 —— `Simon & Garfunkel` 一个字符都不动）。
      */
     val artistDisplay: String
         get() = ArtistSplit.normalize(artist)
@@ -285,6 +284,29 @@ data class LocalGroup(
     val tracks: List<LocalTrackMeta> = emptyList(),
 )
 
+/**
+ * 三个分组页的**预计算结果**。
+ *
+ * [tracks] 是算这份分组时的曲目数：页面据此判断缓存是否与当前曲库同步，
+ * 不同步就退回页面自己算一次。分组本身是 O(n log n)（含 ICU 中文排序），
+ * 几千首时不适合在组合期反复执行。
+ */
+data class LocalGroupSets(
+    val artists: List<LocalGroup> = emptyList(),
+    val albums: List<LocalGroup> = emptyList(),
+    val folders: List<LocalGroup> = emptyList(),
+    val tracks: Int = -1,
+) {
+    fun of(section: LocalSection): List<LocalGroup> = when (section) {
+        LocalSection.artists -> artists
+        LocalSection.albums -> albums
+        LocalSection.folders -> folders
+        else -> emptyList()
+    }
+
+    fun matches(trackCount: Int): Boolean = tracks == trackCount
+}
+
 /** 专辑分组的键（`专辑 · 专辑艺术家`）—— 分组与计数必须用同一套规则，所以抽出来 */
 fun albumGroupKey(t: LocalTrackMeta): String =
     listOfNotNull(t.album.ifBlank { "未知专辑" }, t.albumArtist?.takeIf { it.isNotBlank() })
@@ -398,7 +420,7 @@ fun groupTracks(tracks: List<LocalTrackMeta>, section: LocalSection): List<Local
             // `coverPath == null` —— 但磁盘上 `covers/` 里可能早就有图了。这里同步兜一层
             // `existingCover`（一次 stat，短路即返回），否则会出现「主页有封面、子页面没有」。
             coverPath = list.firstNotNullOfOrNull { t ->
-                t.coverPath ?: LocalLibraryStore.existingCover(t.path)
+                t.coverPath ?: LocalLibraryStore.existingCover(t)
             },
             tracks = list.sortedBy { it.track ?: Int.MAX_VALUE },
         )

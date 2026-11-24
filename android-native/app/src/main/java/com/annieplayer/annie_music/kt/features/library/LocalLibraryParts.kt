@@ -20,10 +20,15 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -54,8 +59,10 @@ import com.annieplayer.annie_music.kt.ui.theme.AppIconSize
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 import com.annieplayer.annie_music.kt.widgets.MusicNoteGlyph
 import com.annieplayer.annie_music.kt.widgets.PlayingIndicator
-import com.annieplayer.annie_music.kt.widgets.SongMoreGlyph
+import com.annieplayer.annie_music.kt.widgets.SelectCheckBox
+import com.annieplayer.annie_music.kt.widgets.SongRowActions
 import com.annieplayer.annie_music.kt.widgets.clickableRipple
+import com.annieplayer.annie_music.kt.widgets.combinedClickableRipple
 import com.annieplayer.annie_music.kt.widgets.playingRowBackground
 
 /**
@@ -309,6 +316,8 @@ fun LocalStatsRow(
     ascending: Boolean,
     onToggleOrder: () -> Unit,
     onRescan: () -> Unit,
+    /** 正在扫描 / 重扫中：按钮变成「转圈 + 重扫中」并且不可点（防止连点排两份任务） */
+    rescanning: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
     Column(modifier = modifier.fillMaxWidth()) {
@@ -352,7 +361,7 @@ fun LocalStatsRow(
             Spacer(modifier = Modifier.width(AppSpacing.sp6))
             StatsPill(text = sortLabel, onClick = onSort)
             Spacer(modifier = Modifier.width(AppSpacing.sp6))
-            StatsPill(text = "重扫", onClick = onRescan)
+            StatsPill(text = "重扫", onClick = onRescan, loading = rescanning, loadingText = "重扫中")
         }
         if (progress != null) {
             Spacer(modifier = Modifier.height(AppSpacing.sp6))
@@ -376,22 +385,38 @@ fun LocalStatsRow(
 
 /** 统计行的胶囊按钮：三个同规格并排，才不会被读成三句文案 */
 @Composable
-private fun StatsPill(text: String, onClick: () -> Unit) {
+private fun StatsPill(
+    text: String,
+    onClick: () -> Unit,
+    /** 进行中：换成转圈 + [loadingText]，并且**不再接受点击** */
+    loading: Boolean = false,
+    loadingText: String = text,
+) {
     Box(
         modifier = Modifier
             .height(StatsPillHeight)
             .clip(RoundedCornerShape(AppRadius.pill))
-            .background(AppColors.whiteA05)
-            .clickableRipple { onClick() }
+            .background(if (loading) AppColors.primaryA12 else AppColors.whiteA05)
+            .then(if (loading) Modifier else Modifier.clickableRipple { onClick() })
             .padding(horizontal = AppSpacing.sp10),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = text,
-            color = AppColors.white60,
-            fontSize = AppFontSize.xs,
-            maxLines = 1,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            if (loading) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(11.dp),
+                    strokeWidth = 1.5.dp,
+                    color = AppColors.primary,
+                )
+                Spacer(modifier = Modifier.width(AppSpacing.sp4))
+            }
+            Text(
+                text = if (loading) loadingText else text,
+                color = if (loading) AppColors.primary else AppColors.white60,
+                fontSize = AppFontSize.xs,
+                maxLines = 1,
+            )
+        }
     }
 }
 
@@ -459,13 +484,21 @@ fun LocalTrackRow(
     modifier: Modifier = Modifier,
     /** 非空时在最左侧显示两位曲目号（专辑 / 艺术家详情页用；总列表页不显示，省宽度） */
     index: Int? = null,
+    selectionMode: Boolean = false,
+    selected: Boolean = false,
+    onToggleSelect: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(AppRadius.r8))
             .then(if (isActive) Modifier.playingRowBackground(playingTint) else Modifier)
-            .clickableRipple { onClick() }
+            .then(if (selected) Modifier.background(AppColors.primaryA08) else Modifier)
+            .combinedClickableRipple(
+                onClick = { if (selectionMode) onToggleSelect?.invoke() else onClick() },
+                onLongClick = onLongPress,
+            )
             .padding(
                 start = AppSpacing.sp8,
                 end = AppSpacing.sp4,
@@ -539,15 +572,14 @@ fun LocalTrackRow(
             )
         }
 
-        // 行尾 ⋮：文件详情 / 加入队列
-        Box(
-            modifier = Modifier
-                .clip(RoundedCornerShape(AppRadius.r8))
-                .clickableRipple { onMore() }
-                .padding(AppSpacing.sp10),
-            contentAlignment = Alignment.Center,
-        ) {
-            SongMoreGlyph(modifier = Modifier.size(AppIconSize.icon18), tint = AppColors.glyphMid)
+        // 行尾：♥ · ⋮（收藏状态由宿主经 `LocalSongLike` 注入；文件详情 / 加入队列在 ⋮ 里）
+        val toggle = onToggleSelect
+        if (selectionMode && toggle != null) {
+            Box(modifier = Modifier.padding(horizontal = AppSpacing.sp10)) {
+                SelectCheckBox(checked = selected, onToggle = toggle)
+            }
+        } else {
+            SongRowActions(song = meta.toSong(), onMore = onMore)
         }
     }
 }
@@ -680,3 +712,56 @@ fun LocalAlbumCard(
         )
     }
 }
+
+/**
+ * 列表滚到可见时补抽封面（分组卡片 / 歌曲行共用一套）。
+ *
+ * 为什么要这个：分组卡片（歌手 / 专辑 / 文件夹）只显示**一张**图，而 [groupTracks]
+ * 只能「查磁盘上已经抽好的」—— 那一组从没抽过封面时卡片就是空的。表现最明显的是
+ * 「重扫之后这些页面全没图」：重扫不抽封面（按需抽取是懒的），卡片自己又不会请求。
+ *
+ * 只对**可见行**请求，3000 首的曲库也不会一次解上千张图；抽到后 `tracks` 更新 →
+ * 列表重算 → 下一帧就有图。
+ *
+ * @param coversByItemKey 列表项 key → 该项要补抽封面的音频路径（分组卡片传组内
+ *   前几首：同一张专辑的内嵌图一样，但**第一首可能根本没内嵌图**，只问一首就会
+ *   把整组卡片永远留空）。已经有 `coverPath` 的项不要放进来，否则白解一张图。
+ */
+@Composable
+internal fun RequestVisibleCovers(
+    listState: LazyListState,
+    coversByItemKey: Map<String, List<String>>,
+    onRequestCover: (String) -> Unit,
+) {
+    if (coversByItemKey.isEmpty()) return
+    LaunchedEffect(listState, coversByItemKey) {
+        snapshotFlow { listState.layoutInfo.visibleItemsInfo.map { it.key } }
+            .collect { keys -> _requestGroupCovers(coversByItemKey, keys, onRequestCover) }
+    }
+}
+
+/** 专辑列表是宫格，滚动状态类型不同（`LazyGridState`），其余完全一样 */
+@Composable
+internal fun RequestVisibleCovers(
+    gridState: LazyGridState,
+    coversByItemKey: Map<String, List<String>>,
+    onRequestCover: (String) -> Unit,
+) {
+    if (coversByItemKey.isEmpty()) return
+    LaunchedEffect(gridState, coversByItemKey) {
+        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.map { it.key } }
+            .collect { keys -> _requestGroupCovers(coversByItemKey, keys, onRequestCover) }
+    }
+}
+
+private fun _requestGroupCovers(
+    coversByItemKey: Map<String, List<String>>,
+    keys: List<Any?>,
+    onRequestCover: (String) -> Unit,
+) {
+    for (key in keys) {
+        val itemKey = key as? String ?: continue
+        for (path in coversByItemKey[itemKey] ?: continue) onRequestCover(path)
+    }
+}
+

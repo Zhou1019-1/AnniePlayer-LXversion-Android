@@ -3,25 +3,6 @@ package com.annieplayer.annie_music.kt.data.local.tag
 import java.io.File
 import java.io.RandomAccessFile
 
-/**
- * MP4 / M4A 标签（`moov/udta/meta/hdlr/ilst`）。
- *
- * 字段布局对着 ffmpeg 的输出逐字节对齐（含 `©nam` 这种首字节 0xA9 的 atom 名、
- * `data` 盒的 typeFlag：1=UTF-8 文本、0=二进制、13=JPEG、14=PNG）。
- *
- * ## 原地写（本类的核心）
- * MP4 里所有 `stco` 都是**绝对偏移**，所以「在 moov 里塞 udta」会让 mdat 后移、偏移全废。
- * 但反过来做就没有这个问题：
- *
- * ```
- * 1. 把旧 moov 的 8 字节盒头原地改成 size=<原大小> type='free'   ← 只写 8 字节
- * 2. 把「新 moov（含 udta）」追加到文件尾                        ← 只写几 KB~几百 KB
- * ```
- * `mdat` 一个字节都没动，`stco` 全部依然有效。代价是 moov 跑到文件尾 —— 这是合法的
- * MP4 布局（所有非 faststart 的 mp4 都长这样），Media3 / 系统播放器都照读。
- *
- * 如果 moov 本来就在文件尾，直接截断重写 moov，连 free 洞都不用留。
- */
 internal object Mp4Codec : TagCodec {
 
     override val format: String = "M4A"
@@ -38,8 +19,6 @@ internal object Mp4Codec : TagCodec {
         val payloadStart: Int get() = start + headerSize
         val end: Int get() = start + size
     }
-
-    // ── box 工具（本类私有：标签库要自成一体，不依赖播放侧那份） ──
 
     private fun boxAt(buf: ByteArray, off: Int, end: Int): Box? {
         if (off + 8 > end) return null
@@ -77,21 +56,18 @@ internal object Mp4Codec : TagCodec {
     private fun fullBox(type: String, versionFlags: Int, payload: ByteArray): ByteArray =
         boxBytes(type, versionFlags.toU32be() + payload)
 
-    // ── 读 ──
-
     override fun read(file: File): TagBag? {
         val moov = readTopLevelBox(file, "moov") ?: return null
         val bag = parseMoov(moov.first, moov.second)
         return bag.takeIf { !it.isEmpty() }
     }
 
-    /** 取某个顶层 box 的 (内容, 大小)；找不到返回 null。 */
-    private fun readTopLevelBox(file: File, wanted: String, maxScan: Long = 64L * 1024 * 1024): Pair<ByteArray, Int>? {
+    private fun readTopLevelBox(file: File, wanted: String): Pair<ByteArray, Int>? {
         if (!file.exists()) return null
         RandomAccessFile(file, "r").use { raf ->
             var pos = 0L
             val head = ByteArray(16)
-            while (pos + 8 <= raf.length() && pos <= maxScan) {
+            while (pos + 8 <= raf.length()) {
                 raf.seek(pos)
                 if (raf.read(head, 0, 8) != 8) return null
                 var size = head.u32be(0).toLong()
@@ -127,7 +103,6 @@ internal object Mp4Codec : TagCodec {
                     else -> null
                 }
             } ?: return TagBag()
-        // meta 是 full box：跳过 4 字节 version/flags
         val ilst = children(moov, meta.payloadStart + 4, meta.end).firstOrNull { it.type == "ilst" }
             ?: return TagBag()
         for (item in children(moov, ilst.payloadStart, ilst.end)) {
@@ -159,7 +134,6 @@ internal object Mp4Codec : TagCodec {
                         if (name.equals("ISRC", ignoreCase = true)) {
                             put(out, TagKey.Isrc, text)
                         } else if (text.isNotEmpty()) {
-                            // 没映射的自由键原样保留：读出来能再写回去，不丢用户的字段
                             extra.putIfAbsent(name, text)
                         }
                     }
@@ -178,35 +152,26 @@ internal object Mp4Codec : TagCodec {
         if (!value.isNullOrEmpty() && out[key].isNullOrEmpty()) out[key] = value
     }
 
-    /** `----` 自由格式 atom 的 name（如 `com.apple.iTunes:ISRC` 里的 ISRC）。 */
     private fun freeformName(buf: ByteArray, item: Box): String? =
         children(buf, item.payloadStart, item.end)
             .firstOrNull { it.type == "name" }
             ?.let { String(buf, it.payloadStart + 4, it.end - it.payloadStart - 4, Charsets.UTF_8) }
-
-    // ── 写 ──
 
     override fun write(file: File, bag: TagBag, policy: WritePolicy): WriteResult {
         val located = locate(file) ?: return WriteResult.fail(format, "找不到 moov")
         val (moovOffset, moovSize) = located
         val moov = runCatching { readRange(file, moovOffset, moovSize) }.getOrNull()
             ?: return WriteResult.fail(format, "读 moov 失败")
-        val existing = runCatching { read(file) }.getOrNull()
-        val merged = TagBag(
-            text = (existing?.text.orEmpty() + bag.text).filterValues { it.isNotEmpty() },
-            cover = bag.cover ?: existing?.cover,
-            extra = (existing?.extra.orEmpty() + bag.extra).filterValues { it.isNotEmpty() },
-        )
+        val existing = parseMoov(moov, moov.size)
+        val merged = bag.mergedWith(existing)
         val newMoov = buildMoov(moov, merged) ?: return WriteResult.fail(format, "重建 moov 失败")
 
         val ok = runCatching {
             RandomAccessFile(file, "rw").use { raf ->
                 val atEnd = moovOffset + moovSize >= raf.length()
                 if (atEnd) {
-                    // moov 本来就在文件尾：截断后重写，连 free 洞都不用留
                     raf.setLength(moovOffset)
                 } else {
-                    // 旧 moov 原地改成等长 free，新 moov 追加到尾部 → mdat 不动，stco 全部有效
                     raf.seek(moovOffset)
                     raf.write(moovSize.toU32be())
                     raf.write("free".toByteArray(Charsets.ISO_8859_1))
@@ -221,7 +186,6 @@ internal object Mp4Codec : TagCodec {
         return if (ok) WriteResult.ok(format, inPlace = true) else WriteResult.fail(format, "写 moov 失败")
     }
 
-    /** 找 moov 的 (偏移, 大小)。 */
     private fun locate(file: File): Pair<Long, Int>? {
         if (!file.exists()) return null
         RandomAccessFile(file, "r").use { raf ->
@@ -253,15 +217,11 @@ internal object Mp4Codec : TagCodec {
         return buf
     }
 
-    /** 把 moov 里除 udta 外的子 box 原样保留，再把我们生成的 udta 追加进去。 */
     internal fun buildMoov(moov: ByteArray, bag: TagBag): ByteArray? {
         val moovBox = boxAt(moov, 0, moov.size) ?: return null
         val out = java.io.ByteArrayOutputStream()
         for (child in children(moov, moovBox.payloadStart, moovBox.end)) {
-            if (child.type == "udta" || child.type == "meta") {
-                // 原有的 udta 丢掉（由我们重建）；顶层 meta 一般是 ISO 的键值写法，保留
-                if (child.type == "udta") continue
-            }
+            if (child.type == "udta") continue
             out.write(moov.copyOfRange(child.start, child.end))
         }
         out.write(buildUdta(bag))
@@ -289,10 +249,9 @@ internal object Mp4Codec : TagCodec {
         bag[TagKey.Track]?.let { ilst.write(item(TYPE_TRKN, 0, slashPairPayload(it))) }
         bag[TagKey.Disc]?.let { ilst.write(item(TYPE_DISK, 0, slashPairPayload(it))) }
         bag[TagKey.Isrc]?.let { ilst.write(freeformItem("ISRC", it)) }
-        // 长尾字段：一律走 `----` freeform（MP4 唯一的「任意键值」机制）
         for ((name, value) in bag.extra) {
             if (value.isEmpty()) continue
-            if (name.equals("ISRC", ignoreCase = true)) continue // 标准字段已写过
+            if (name.equals("ISRC", ignoreCase = true)) continue
             ilst.write(freeformItem(name, value))
         }
         bag.cover?.let { ilst.write(item(TYPE_COVR, if (it.isPng) 14 else 13, it.bytes)) }
@@ -300,20 +259,18 @@ internal object Mp4Codec : TagCodec {
         val hdlr = fullBox(
             "hdlr",
             0,
-            ByteArray(4) + // pre_defined
+            ByteArray(4) +
                 "mdir".toByteArray(Charsets.ISO_8859_1) +
-                ByteArray(12) + // reserved
-                byteArrayOf(0), // 空名字
+                ByteArray(12) +
+                byteArrayOf(0),
         )
         val meta = fullBox("meta", 0, hdlr + boxBytes("ilst", ilst.toByteArray()))
         return boxBytes("udta", meta)
     }
 
-    /** 一个 ilst 条目：`type` 盒里包一个 `data` 盒。 */
     private fun item(type: String, typeFlag: Int, payload: ByteArray): ByteArray =
         boxBytes(type, fullBox("data", typeFlag, ByteArray(4) + payload))
 
-    /** `trkn` / `disk` 的二进制 payload：reserved(2) | 序号(2) | 总数(2) | reserved(2)。 */
     private fun slashPairPayload(value: String): ByteArray {
         val (first, second) = parseSlashPair(value)
         val out = ByteArray(8)
@@ -322,7 +279,6 @@ internal object Mp4Codec : TagCodec {
         return out
     }
 
-    /** `----` 自由格式条目（`mean` + `name` + `data`），iTunes 用它存 ISRC 这类扩展字段。 */
     private fun freeformItem(name: String, value: String): ByteArray {
         val mean = fullBox("mean", 0, "com.apple.iTunes".toByteArray(Charsets.UTF_8))
         val nameBox = fullBox("name", 0, name.toByteArray(Charsets.UTF_8))

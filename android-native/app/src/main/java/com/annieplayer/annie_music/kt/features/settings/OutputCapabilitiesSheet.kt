@@ -29,7 +29,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.annieplayer.annie_music.kt.core.audio.AudioDirectProbe
 import com.annieplayer.annie_music.kt.core.audio.DsdFormatProbe
-import com.annieplayer.annie_music.kt.core.audio.MixerAttributesProbe
 import com.annieplayer.annie_music.kt.core.audio.UsbAudioDirect
 import com.annieplayer.annie_music.kt.core.audio.dsp.NativeUacStream
 import com.annieplayer.annie_music.kt.widgets.AppSheet
@@ -77,13 +76,6 @@ fun OutputCapabilitiesSheet(
         }
         val dsdText = produceState(initialValue = "读取中…", visible, reload) {
             value = if (visible) withContext(Dispatchers.IO) { DsdFormatProbe.report() } else ""
-        }
-        val mixerText = produceState(initialValue = "读取中…", visible, reload) {
-            value = if (visible) withContext(Dispatchers.IO) {
-                MixerAttributesProbe.report(context)
-            } else {
-                ""
-            }
         }
         Column(Modifier.fillMaxWidth()) {
             Row(
@@ -164,18 +156,6 @@ fun OutputCapabilitiesSheet(
                     )
                     Text(
                         text = dsdText.value,
-                        color = Color.White.copy(alpha = 0.92f),
-                        fontSize = 13.sp,
-                    )
-                }
-                Column(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 6.dp)) {
-                    Text(
-                        text = "Bit Perfect 混音",
-                        color = Color.White.copy(alpha = 0.55f),
-                        fontSize = 12.sp,
-                    )
-                    Text(
-                        text = mixerText.value,
                         color = Color.White.copy(alpha = 0.92f),
                         fontSize = 13.sp,
                     )

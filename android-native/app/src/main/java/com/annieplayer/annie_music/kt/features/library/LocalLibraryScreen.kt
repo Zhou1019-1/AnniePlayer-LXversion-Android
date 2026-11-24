@@ -1,6 +1,8 @@
 package com.annieplayer.annie_music.kt.features.library
 
 import androidx.compose.foundation.background
+import androidx.activity.compose.BackHandler
+import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -42,7 +44,10 @@ import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.platform.LocalDensity
 import com.annieplayer.annie_music.kt.core.compose.activityViewModel
 import com.annieplayer.annie_music.kt.core.state.LocalSectionRoute
+import com.annieplayer.annie_music.kt.core.state.MultiSelectOrigin
+import com.annieplayer.annie_music.kt.core.state.MultiSelectSheetState
 import com.annieplayer.annie_music.kt.core.state.PlayerViewModel
+import com.annieplayer.annie_music.kt.data.favorites.PlaylistScope
 import com.annieplayer.annie_music.kt.data.local.LocalSection
 import com.annieplayer.annie_music.kt.data.local.LOCAL_BUCKET_COUNT
 import com.annieplayer.annie_music.kt.data.local.LocalLibraryStore
@@ -57,12 +62,15 @@ import com.annieplayer.annie_music.kt.ui.theme.AppRadius
 import com.annieplayer.annie_music.kt.ui.theme.AppSize
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 import com.annieplayer.annie_music.kt.ui.theme.ColorPalette
+import com.annieplayer.annie_music.kt.ui.theme.LocalCoverThemePalette
 import com.annieplayer.annie_music.kt.widgets.AppSheet
 import com.annieplayer.annie_music.kt.widgets.AppTopBar
-import com.annieplayer.annie_music.kt.widgets.CoverPaletteBackdrop
+import com.annieplayer.annie_music.kt.widgets.MultiSelectHeaderActions
+import com.annieplayer.annie_music.kt.widgets.ResumePlayingPill
 import com.annieplayer.annie_music.kt.widgets.SearchBarField
 import com.annieplayer.annie_music.kt.widgets.VinylRecord
 import com.annieplayer.annie_music.kt.widgets.clickableRipple
+import com.annieplayer.annie_music.kt.widgets.rememberPlayingRowVisible
 import com.annieplayer.annie_music.kt.widgets.shortScrollbar
 import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.firstOrNull
@@ -103,6 +111,7 @@ fun LocalLibraryScreen(
     libraryViewModel: LocalLibraryViewModel = activityViewModel(),
     // 宫格 / 行尾 ⋮ 都走流媒体那套 UiViewModel（pageStack / songActions），不再自带栈
     uiViewModel: com.annieplayer.annie_music.kt.core.state.UiViewModel = activityViewModel(),
+    backToSelectMode: Boolean = true,
 ) {
     val st by libraryViewModel.state.collectAsState()
     val playback by playerViewModel.state.collectAsState()
@@ -114,6 +123,17 @@ fun LocalLibraryScreen(
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
     var sheetTrack by remember { mutableStateOf<LocalTrackMeta?>(null) }
+
+    var selectMode by remember { mutableStateOf(false) }
+    val selectedPaths = remember { mutableStateListOf<String>() }
+    fun toggleSelectMode() {
+        selectMode = !selectMode
+        selectedPaths.clear()
+    }
+    fun toggleSelect(path: String) {
+        if (!selectedPaths.remove(path)) selectedPaths.add(path)
+    }
+    BackHandler(enabled = selectMode && backToSelectMode) { toggleSelectMode() }
 
     // ── 派生数据 ──
     // 注意：这里每个 remember 都挂在不常变的值上。曲库页一旦有几千首，
@@ -130,6 +150,21 @@ fun LocalLibraryScreen(
     // 已读条数同样只算一次：`tracks.count { }` 是 O(n)，放进重组里就是几千次比较/帧
     val probedCount = remember(st.tracks) { st.tracks.count { it.probed } }
     val visible = remember(st.tracks, st.query) { filterTracks(st.tracks, st.query) }
+    val pickedSongs = remember(selectedPaths.toList(), visible) {
+        visible.filter { it.path in selectedPaths }.map { it.toSong() }
+    }
+    val playingPath = playback.currentSong?.id?.removePrefix("local:")
+    val playingRowIndex = remember(visible, playingPath) {
+        if (playingPath.isNullOrEmpty()) {
+            null
+        } else {
+            visible.indexOfFirst { it.path == playingPath }
+                .takeIf { it >= 0 }
+                ?.plus(HEADER_ITEM_COUNT)
+        }
+    }
+    val playingRowVisible = rememberPlayingRowVisible(listState, playingRowIndex)
+    val resumeVisible = playingRowIndex != null && !playingRowVisible
 
     // 字母索引条：只有「按标题 / 艺术家 / 专辑」这类字母排序才有意义
     val alphaKeyOf: ((LocalTrackMeta) -> String)? = when (st.sort) {
@@ -172,8 +207,6 @@ fun LocalLibraryScreen(
     }
 
     Box(modifier = modifier.fillMaxSize()) {
-        LocalStaticBackdrop(modifier = Modifier.fillMaxSize())
-
         Column(
             modifier = Modifier
                 .fillMaxSize()
@@ -183,6 +216,23 @@ fun LocalLibraryScreen(
             AppTopBar(
                 title = "本地曲库",
                 onOpenMenu = onOpenMenu,
+                trailing = {
+                    MultiSelectHeaderActions(
+                        count = pickedSongs.size,
+                        onClear = { selectedPaths.clear() },
+                        onOpenActions = {
+                            if (pickedSongs.isNotEmpty()) {
+                                uiViewModel.openMultiSelectSheet(
+                                    MultiSelectSheetState(
+                                        songs = pickedSongs,
+                                        scope = PlaylistScope.local,
+                                        origin = MultiSelectOrigin.LocalPage,
+                                    ),
+                                )
+                            }
+                        },
+                    )
+                },
             )
 
             // 列表 + 右侧字母索引条（索引条只在按字母排序时出现）
@@ -338,6 +388,7 @@ fun LocalLibraryScreen(
                         ascending = st.sortAscending,
                         onToggleOrder = { libraryViewModel.toggleSortOrder() },
                         onRescan = { libraryViewModel.refresh(context, force = true) },
+                        rescanning = st.scanning,
                         modifier = Modifier.padding(
                             horizontal = AppSpacing.sp16,
                             vertical = AppSpacing.sp8,
@@ -350,7 +401,7 @@ fun LocalLibraryScreen(
                     Box(modifier = Modifier.padding(horizontal = AppSpacing.sp16)) {
                         LocalSectionHeader(
                             title = "全部歌曲",
-                            subtitle = "${visible.size} 首",
+                            subtitle = null,
                             onBack = null,
                         )
                     }
@@ -399,6 +450,17 @@ fun LocalLibraryScreen(
                                 onClick = { playFrom(meta) },
                                 // ⋮ 复用流媒体的歌曲操作面板（下载 → 歌曲详情，在面板内按平台区分）
                                 onMore = { uiViewModel.setSongActionsVisible(true, meta.toSong()) },
+                                selectionMode = selectMode,
+                                selected = selectedPaths.contains(meta.path),
+                                onToggleSelect = { toggleSelect(meta.path) },
+                                onLongPress = if (selectedPaths.contains(meta.path)) {
+                                    null
+                                } else {
+                                    {
+                                        if (!selectMode) selectMode = true
+                                        toggleSelect(meta.path)
+                                    }
+                                },
                             )
                         }
                     }
@@ -421,6 +483,22 @@ fun LocalLibraryScreen(
             }
         }
 
+        val resumeIndex = playingRowIndex
+        ResumePlayingPill(
+            visible = resumeVisible,
+            palette = LocalCoverThemePalette.current,
+            onClick = {
+                if (resumeIndex != null) {
+                    scope.launch { listState.animateScrollToItem(resumeIndex) }
+                }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(
+                    end = AppSpacing.sp16,
+                    bottom = AppSpacing.bottomBarInset + AppSpacing.sp12,
+                ),
+        )
     }
 
     // ── 文件详情 / 队列 sheet ──

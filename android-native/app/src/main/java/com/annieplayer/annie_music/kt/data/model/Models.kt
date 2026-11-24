@@ -228,10 +228,19 @@ enum class LoopMode {
     }
 }
 
-/** 专辑曲目 + 发行时间（[pub] 取接口给的发行日期，可能为空串） */
+/**
+ * 专辑曲目 + 发行时间（[pub] 取接口给的发行日期，可能为空串）。
+ *
+ * [company] 是「唱片公司 / 版权方」（QQ 的 `company`、酷狗的 `publish_company`…）：
+ * 只有部分平台给，拿不到就是空串。写标签时它作为 `copyright` 的来源之一
+ * （见 `MusicRepository.fetchAlbumCopyright`）—— 流媒体下载与本地导入共用同一份。
+ */
 data class AlbumSongsPage(
     val songs: List<AlbumSong>,
     val pub: String = "",
+    val company: String = "",
+    /** 专辑流派（QQ 的 `data.genre` 形如 "Pop 流行"）；平台没给就是空串 */
+    val genre: String = "",
 )
 
 /** 歌手单曲每页条数：各源按它请求、详情页按它算页码，两侧必须一致 */
@@ -327,6 +336,7 @@ data class Album(
     val vip: String = "",
     @SerialName("PLAYCNT")
     val playcnt: String = "",
+    val kind: String = "",
 )
 
 /** 专辑内歌曲（kuwo） */

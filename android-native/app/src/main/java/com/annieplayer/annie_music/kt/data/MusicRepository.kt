@@ -12,6 +12,7 @@ import com.annieplayer.annie_music.kt.data.network.anyToJsonElement
 import com.annieplayer.annie_music.kt.data.network.cacheService
 import com.annieplayer.annie_music.kt.data.network.json
 import com.annieplayer.annie_music.kt.data.network.jsonElementToAny
+import com.annieplayer.annie_music.kt.data.sources.apple.fetchAppleAlbumCopyright
 import com.annieplayer.annie_music.kt.data.sources.apple.fetchAppleArtistAvatar
 import com.annieplayer.annie_music.kt.data.sources.apple.fetchAppleArtistBio
 import com.annieplayer.annie_music.kt.data.sources.apple.getAppleAlbumSongs
@@ -57,6 +58,7 @@ import com.annieplayer.annie_music.kt.data.sources.lyric.NO_LYRIC
 import com.annieplayer.annie_music.kt.data.sources.netease.enrichNeteaseSong
 import com.annieplayer.annie_music.kt.data.sources.netease.fetchNeteaseArtistAvatar
 import com.annieplayer.annie_music.kt.data.sources.netease.fetchNeteaseArtistBio
+import com.annieplayer.annie_music.kt.data.sources.netease.getNeteaseAlbumDetail
 import com.annieplayer.annie_music.kt.data.sources.netease.getNeteaseAlbumSongs
 import com.annieplayer.annie_music.kt.data.sources.netease.getNeteaseArtistAlbums
 import com.annieplayer.annie_music.kt.data.sources.netease.getNeteaseArtistSongs
@@ -126,6 +128,22 @@ data class RepoAlbumSongs(
     val songs: List<AlbumSong>,
     val pub: String,
     val qualitySpec: String = "",
+    /** 唱片公司 / 版权方（部分平台有；写标签时作为 `copyright` 的来源） */
+    val company: String = "",
+    /** 专辑流派（部分平台有；曲目自己没给流派时用它补） */
+    val genre: String = "",
+    /** 3:4 竖版封面（Apple 有；动态封面的底图，其他平台为空） */
+    val tallCover: String = "",
+    /** 动态封面 HLS 地址（Apple 有；空 = 这张专辑没有动态封面） */
+    val motionCover: String = "",
+    /**
+     * 专辑名 / 专辑艺术家：**取自专辑详情接口本身**（不是列表行）。
+     *
+     * 列表接口给的歌手常与 Apple 对不上（酷我尤其），而详情接口的字段拿去搜 Apple 能命中，
+     * 所以查动态封面时优先用这两个，空才退回列表里的 `AlbumDetailData`。
+     */
+    val lookupAlbum: String = "",
+    val lookupArtist: String = "",
 )
 
 /** 歌手单曲结果（对齐 Dart `({List<Song> songs, int total})`） */
@@ -385,13 +403,29 @@ suspend fun fetchAlbumSongsByPlatform(
     platform: MusicPlatform,
     albumId: String,
 ): RepoAlbumSongs = when (platform) {
-    MusicPlatform.netease -> getNeteaseAlbumSongs(albumId).let { RepoAlbumSongs(it.songs, it.pub) }
-    MusicPlatform.qq -> getQQAlbumSongs(albumId).let { RepoAlbumSongs(it.songs, it.pub) }
-    MusicPlatform.kugou -> getKugouAlbumSongs(albumId).let { RepoAlbumSongs(it.songs, it.pub) }
-    MusicPlatform.qobuz -> {
-        val a = getQobuzAlbum(albumId, "")
+    MusicPlatform.netease -> getNeteaseAlbumSongs(albumId).let {
+        // 网易的公司在 `NeteaseAlbumDetail` 里（`/api/v1/album/{id}`），曲目接口不带
+        val detail = runCatching { getNeteaseAlbumDetail(albumId) }.getOrNull()
         RepoAlbumSongs(
-            a.tracks.map { t ->
+            songs = it.songs,
+            pub = it.pub,
+            company = detail?.company.orEmpty(),
+            lookupAlbum = detail?.name.orEmpty(),
+            lookupArtist = detail?.artist.orEmpty(),
+        )
+    }
+    MusicPlatform.qq -> getQQAlbumSongs(albumId).let {
+        RepoAlbumSongs(it.songs, it.pub, company = it.company, genre = it.genre)
+    }
+    MusicPlatform.kugou -> getKugouAlbumSongs(albumId).let {
+        RepoAlbumSongs(it.songs, it.pub, company = it.company)
+    }
+    MusicPlatform.qobuz -> {
+        // token 必须带上：空 token 这个接口直接 401，「专辑级补齐」（轨号/碟号/专辑艺术家/
+        // 发行日期/流派/作曲/ISRC）就静默全丢 —— 导入页会只剩标题和歌手。
+        val a = getQobuzAlbum(albumId, qobuzTokenProvider().orEmpty())
+        RepoAlbumSongs(
+            songs = a.tracks.map { t ->
                 AlbumSong(
                     id = "qobuz:${t.id}",
                     name = t.title,
@@ -399,6 +433,7 @@ suspend fun fetchAlbumSongsByPlatform(
                     duration = t.duration,
                     track = if (t.trackNumber > 0) t.trackNumber else null,
                     discNumber = t.discNumber,
+                    albumArtist = t.albumArtist,
                     qualities = if (a.hires) {
                         listOf(Quality.hires, Quality.flac, Quality.k320k)
                     } else {
@@ -406,15 +441,28 @@ suspend fun fetchAlbumSongsByPlatform(
                     },
                     artistNames = t.artistNames,
                     artistIds = t.artistIds,
+                    composer = t.composer,
+                    genre = t.genre,
+                    isrc = t.isrc,
                 )
             },
-            if (a.year > 0) a.year.toString() else "",
-            qobuzQualitySpec(a),
+            pub = if (a.year > 0) a.year.toString() else "",
+            qualitySpec = qobuzQualitySpec(a),
+            // Qobuz 的「唱片公司」在专辑上（`label`）；没有歌曲级版权时它就是版权来源
+            company = a.label,
+            lookupAlbum = a.title,
+            lookupArtist = a.artist,
         )
     }
     MusicPlatform.kuwo -> {
         val r = getAlbumSongs(albumId)
-        RepoAlbumSongs(r.songs, r.pub)
+        RepoAlbumSongs(
+            songs = r.songs,
+            pub = r.pub,
+            company = r.company,
+            lookupAlbum = r.albumName,
+            lookupArtist = r.artistName,
+        )
     }
     // KKBOX 只走自己的专辑接口：它的 encrypted_album_id 在酷我根本不存在
     MusicPlatform.kkbox -> {
@@ -439,9 +487,32 @@ suspend fun fetchAlbumSongsByPlatform(
         )
     }
     MusicPlatform.apple -> getAppleAlbumSongs(albumId).let {
-        RepoAlbumSongs(it.songs, it.pub)
+        // Apple 的版权在专辑级 `copyright` 上（不是 company）
+        val copyright = runCatching { fetchAppleAlbumCopyright(albumId) }.getOrNull().orEmpty()
+        RepoAlbumSongs(
+            songs = it.songs,
+            pub = it.pub,
+            company = copyright,
+            tallCover = it.tallCover,
+            motionCover = it.motionCover,
+        )
     }
     MusicPlatform.local -> RepoAlbumSongs(emptyList(), "")
+}
+
+/**
+ * 专辑的**版权 / 唱片公司**文本（写标签时进 `copyright`）。
+ *
+ * 五个平台一处收口：Apple 是专辑 `copyright`（「℗ 2024 xxx」），国内四家是唱片公司名。
+ * 下载打标与本地导入都调它 —— 以前只有 Apple 会写版权，其它平台一律空着。
+ *
+ * 失败/没有一律返回 null（宁可不写，也不写错）。
+ */
+suspend fun fetchAlbumCopyright(platform: MusicPlatform, albumId: String?): String? {
+    if (albumId.isNullOrBlank()) return null
+    return runCatching {
+        fetchAlbumSongsByPlatform(platform, albumId).company.takeIf { it.isNotBlank() }
+    }.getOrNull()
 }
 
 /**
@@ -682,19 +753,11 @@ suspend fun fetchArtistAlbumsByPlatform(
     MusicPlatform.local -> emptyList()
 }
 
-/**
- * 歌词（按 `platform` 分发，**没有兜底平台**）。
- *
- * [kkboxSid] 为 KKBOX 活跃账号会话 sid：仅当 platform 为 kkbox 时使用，
- * 有 sid 调 `getSongLyrics` 拉真实歌词，无则返回占位。
- */
 suspend fun fetchLyric(
     song: Song,
     kkboxSid: String? = null,
     autoPickTranslate: Boolean = false,
 ): LyricResult {
-    // 本地文件：歌词就在文件旁边（同名 .lrc）或文件内嵌（`lyrics` tag），
-    // 不联网、不进歌词缓存 —— 用户改了 .lrc 应该立刻生效。
     if (song.platform == MusicPlatform.local) {
         return runCatching {
             val path = song.id.removePrefix("local:")
@@ -708,22 +771,17 @@ suspend fun fetchLyric(
         }.getOrElse { LyricResult(lrc = "[00:00.00]暂无歌词", tlyric = null) }
     }
 
-    // 已下载的歌（platform 还是云端平台，但本地有文件）：**歌词本地优先** ——
-    // 下载时把歌词写进了文件 tag，同目录也可能有 .lrc。命中就直接用，不联网；
-    // 没命中再照常走各平台接口（右边这一整段就是 API 兜底）。
-    if (!song.lyric.isNullOrBlank() && !song.lyric.contains("暂无歌词")) {
-        // 队列里已经带了歌词（本地曲库播放时填过），不必再查
-        return LyricResult(lrc = song.lyric, tlyric = song.tlyric, wordLyric = song.wordLyric)
-    }
-    runCatching {
-        com.annieplayer.annie_music.kt.data.local.LocalLibraryStore
-            .lyricForDownloadedSong(song.title, song.artist)
-    }.getOrNull()?.let { local ->
-        val (lrc, tlyric, word) = com.annieplayer.annie_music.kt.core.util.splitEmbeddedLyric(local)
-        return LyricResult(lrc = lrc.ifEmpty { local }, tlyric = tlyric, wordLyric = word)
+    val needTranslation = !song.lyricTranslateLang.isNullOrBlank() && song.tlyric.isNullOrBlank()
+    if (!needTranslation && !song.lyric.isNullOrBlank() && !song.lyric.contains("暂无歌词")) {
+        return LyricResult(
+            lrc = song.lyric,
+            tlyric = song.tlyric,
+            wordLyric = song.wordLyric,
+            translateLangs = song.lyricTranslateLangs,
+            translateLang = song.lyricTranslateLang,
+        )
     }
 
-    // KKBOX 歌词依赖会话，不进入通用歌词缓存（对齐 RN AudioContext 单独处理）
     if (song.platform == MusicPlatform.kkbox) {
         if (kkboxSid.isNullOrEmpty()) {
             return LyricResult(lrc = "[00:00.00]暂无歌词", tlyric = null)
@@ -733,13 +791,7 @@ suspend fun fetchLyric(
         return LyricResult(lrc = r.lrc, tlyric = r.tlyric)
     }
 
-    // 译文语言要进 key：同一首歌换语言是不同结果，共用 key 会一直命中旧译文；
-    // autoPickTranslate 也进 key，否则「自动取第一个译文」的缓存会被「只要原文」的下载分支命中。
-    // （以前 Apple 还要多带一个 `:local`/`:remote` 源标记 —— 非官方源已收敛成用户配的
-    //  wrapper 地址这一条，源分叉不存在了，标记随之删除。）
-    // v7：v6 及以前会把「拉取失败」当成占位文本缓存满 TTL（分不清失败与真空），
-    // 那些坏条目要一次性作废，否则修好了行为也会被旧缓存挡着。
-    val cacheKey = "lyric:v7:${song.id}:${song.lyricTranslateLang.orEmpty()}:" +
+    val cacheKey = "lyric:v8:${song.id}:${song.lyricTranslateLang.orEmpty()}:" +
         (if (autoPickTranslate) "auto" else "raw")
     val cached = cacheService.get<String>(cacheKey)
     if (cached != null) {
@@ -748,7 +800,6 @@ suspend fun fetchLyric(
             if (parsed is Map<*, *> && parsed["lrc"] is String) {
                 val cachedLrc = parsed["lrc"] as String
                 return LyricResult(
-                    // 缓存里存的是「空」表示没取到，对外统一成占位文本
                     lrc = cachedLrc.ifEmpty { NO_LYRIC },
                     tlyric = parsed["tlyric"] as String?,
                     wordLyric = parsed["wordLyric"] as String?,
@@ -759,13 +810,10 @@ suspend fun fetchLyric(
                 )
             }
         } catch (_: Throwable) {
-            // 缓存内容损坏：忽略并重新拉取
         }
     }
 
     return try {
-        // 平台实现全部在 `data/sources/lyric/`：按 platform 一对一匹配，**没有兜底平台**。
-        // 认不出（含以后新增但忘了注册）就给占位 —— 一眼能发现，不会静默去请求某一家。
         val source = LyricSources.of(song)
             ?: return LyricResult(lrc = NO_LYRIC, tlyric = null)
         val fetched = source.fetch(
@@ -775,13 +823,9 @@ suspend fun fetchLyric(
                 autoPickTranslate = autoPickTranslate,
             ),
         )
-        // 各平台实现内部仍会吞异常并返回那个占位串，这里统一归一成「空」——
-        // 门面只认「有词 / 没词」两种，才好决定缓存多久。
         val result = if (fetched.lrc == NO_LYRIC) fetched.copy(lrc = "") else fetched
         val ttl = when {
             result.lrc.isNotEmpty() -> _lyricCacheTtl
-            // Apple 走的是用户配的 wrapper 地址：空结果多半是「服务刚起来 / 那台实例没有这首歌」，
-            // 把空结果缓存住会让歌词一直不出来 —— 不缓存，下次进页面再问一次。
             song.platform == MusicPlatform.apple -> null
             else -> _lyricEmptyCacheTtl
         }
@@ -802,8 +846,6 @@ suspend fun fetchLyric(
         }
         if (result.lrc.isEmpty()) result.copy(lrc = NO_LYRIC) else result
     } catch (_: Throwable) {
-        // 抛异常 = 明确的失败。存 10 分钟的空结果：下次播放/切歌能自愈，
-        // 又不像以前那样把失败当结果锁满 60 分钟。Apple 不存（本机服务随时可能就绪）。
         if (song.platform != MusicPlatform.apple) {
             cacheService.set(
                 cacheKey,

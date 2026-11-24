@@ -14,15 +14,18 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredHeight
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.State
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -30,9 +33,11 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
+import androidx.compose.animation.core.Animatable
+import androidx.compose.ui.draw.drawWithCache
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
@@ -41,7 +46,6 @@ import androidx.compose.ui.graphics.Shape
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -65,6 +69,7 @@ import com.annieplayer.annie_music.kt.ui.theme.AppRadius
 import com.annieplayer.annie_music.kt.ui.theme.AppSize
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 import com.annieplayer.annie_music.kt.ui.theme.LocalCoverThemePalette
+import com.annieplayer.annie_music.kt.features.tools.ToolsGlyph
 import com.annieplayer.annie_music.kt.widgets.BarGlassSpec
 import com.annieplayer.annie_music.kt.widgets.LocalLibraryGlyph
 import com.annieplayer.annie_music.kt.widgets.MediaLibraryGlyph
@@ -95,6 +100,21 @@ private val PlayingDotSize = 12.dp
 
 /** 「正在播放」指示点外环宽度（取页面底色，把点从封面颜色里「抠」出来） */
 private val PlayingDotRing = 2.dp
+
+/** tab 视觉块高度 = 中间封面盒边长的 75%（60dp × 0.75 = 45dp） */
+private val BottomBarTabContentHeight = AppSize.bottomBarCoverSize * 0.75f
+
+/** tab 图标边长：整块 45dp 里去掉 10sp 标签与 2dp 间距后剩下的高度（≈30dp） */
+private val BottomBarTabIconSize = BottomBarTabContentHeight * 0.66f
+
+/** 同侧两颗 tab 之间的间距 */
+private val BottomBarTabGroupGap = AppSpacing.sp6
+
+private val BottomBarMiniTitleStyle = TextStyle(
+    color = Color.White,
+    fontSize = AppFontSize.size17,
+    fontWeight = FontWeight.SemiBold,
+)
 
 /**
  * 常驻底栏（Android-only 设计，Flutter 基线无对应实现）。
@@ -149,6 +169,7 @@ fun AppBottomBar(
     progress: StateFlow<PlaybackProgress>,
     onOpenPlayer: () -> Unit,
     modifier: Modifier = Modifier,
+    glassCoverUrl: String = "",
 ) {
     val barHeight = AppSize.bottomBarHeight
     val barShape = RoundedCornerShape(percent = 50)
@@ -156,10 +177,11 @@ fun AppBottomBar(
     val panelHeight = barHeight + bottomInset
 
     val effectiveCover = coverUrl.ifEmpty { fallbackCoverUrl }
+    val glassCover = glassCoverUrl.ifEmpty { effectiveCover }
     val hasSong = title.isNotEmpty()
 
     // 0 = 底栏态；1 = 迷你播放器态。三者（封面位移 / tab 淡出 / 迷你元素淡入）共用这一条进度。
-    val morph by animateFloatAsState(
+    val morph = animateFloatAsState(
         targetValue = if (isMiniPlayer) 1f else 0f,
         animationSpec = tween(
             durationMillis = AppDuration.bottomBarMorph,
@@ -175,7 +197,7 @@ fun AppBottomBar(
     // 底栏永远是那块半透明的塑料。改成极淡的主色染色（8.5%）后，背景的色相
     // 才能透上来，等价于 CSS `backdrop-filter: saturate()` 的近似。
     val ambientTint = LocalCoverThemePalette.current.primary
-    val glassTint by animateColorAsState(
+    val glassTint = animateColorAsState(
         targetValue = ambientTint,
         animationSpec = tween(durationMillis = 900, easing = LinearEasing),
         label = "bottomBarGlassTint",
@@ -191,7 +213,7 @@ fun AppBottomBar(
         BottomBarGlass(
             shape = barShape,
             tint = glassTint,
-            coverUrl = effectiveCover,
+            coverUrl = glassCover,
             modifier = Modifier.fillMaxSize(),
         ) {
             if (isMiniPlayer) onOpenPlayer()
@@ -205,10 +227,7 @@ fun AppBottomBar(
                 .height(barHeight),
         ) {
             val width = maxWidth
-            val density = LocalDensity.current
-
-            // 封面横向位置：底栏态居中 → 迷你态贴左（由 morph 插值，即「左滑」）
-            val coverLeft = (width - coverSize) / 2 * (1f - morph) + BottomBarMiniCoverStart * morph
+            val centerLeft = (width - coverSize) / 2
 
             // 迷你态文字 / 进度条的横向占用（避开左侧封面；右侧已无播放钮 → 直接贴右内边距）
             val miniTextStart = BottomBarMiniCoverStart + coverSize + BottomBarMiniGap
@@ -219,18 +238,14 @@ fun AppBottomBar(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(start = miniTextStart, end = miniTextEnd)
-                    .alpha(morph)
+                    .graphicsLayer { alpha = morph.value }
                     .clickableNoRipple { if (isMiniPlayer) onOpenPlayer() },
                 verticalArrangement = Arrangement.Center,
             ) {
                 MovingText(
                     text = if (hasSong) title else "暂无播放",
                     threshold = 15,
-                    style = TextStyle(
-                        color = Color.White,
-                        fontSize = AppFontSize.size17,
-                        fontWeight = FontWeight.SemiBold,
-                    ),
+                    style = BottomBarMiniTitleStyle,
                 )
                 Spacer(modifier = Modifier.height(AppSpacing.sp4))
                 Text(
@@ -245,7 +260,7 @@ fun AppBottomBar(
                 modifier = Modifier
                     .align(Alignment.BottomStart)
                     .padding(start = miniTextStart, end = miniTextEnd)
-                    .alpha(morph),
+                    .graphicsLayer { alpha = morph.value },
             ) {
                 MiniProgressBarHost(
                     progress = progress,
@@ -254,37 +269,59 @@ fun AppBottomBar(
             }
 
             // ── ②-b 左右 tab（淡出；迷你态禁点，避免透明热区截走点击） ──
+            //
+            // 横向**贴两端**（不往中间挤）：左端「主页 + 收藏库」，右端「(第 4 个) + 本地」。
+            // 右组从右往左排，本地固定在最右一格 —— 这样本地左侧永远留着一格给下一个按钮，
+            // 新按钮加进来时不需要动本地、也不会顶到中间封面。
             BottomBarTab(
+                label = "主页",
                 selected = selectedTab == AppTab.Home,
                 enabled = !isMiniPlayer,
                 onClick = { onSelectTab(AppTab.Home) },
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .padding(start = BottomBarSidePadding)
-                    .alpha(1f - morph),
-                icon = { tint -> HomeGlyph(modifier = Modifier.size(AppIconSize.icon22), tint = tint) },
+                    .graphicsLayer { alpha = 1f - morph.value },
+                icon = { tint -> HomeGlyph(modifier = Modifier.size(BottomBarTabIconSize), tint = tint) },
             )
             // 主页右侧：收藏媒体库 tab（图标是「书页 + 书身 + 音符」的资料库形，
             // 与右侧本地曲库的「书身 + 音符」刻意区分）
             BottomBarTab(
+                label = "收藏库",
                 selected = selectedTab == AppTab.Favorites,
                 enabled = !isMiniPlayer,
                 onClick = { onSelectTab(AppTab.Favorites) },
                 modifier = Modifier
                     .align(Alignment.CenterStart)
-                    .padding(start = BottomBarSidePadding + AppSize.bottomBarTabHitSize)
-                    .alpha(1f - morph),
-                icon = { tint -> MediaLibraryGlyph(modifier = Modifier.size(AppIconSize.icon22), tint = tint) },
+                    .padding(
+                        start = BottomBarSidePadding + AppSize.bottomBarTabHitSize + BottomBarTabGroupGap,
+                    )
+                    .graphicsLayer { alpha = 1f - morph.value },
+                icon = { tint -> MediaLibraryGlyph(modifier = Modifier.size(BottomBarTabIconSize), tint = tint) },
             )
             BottomBarTab(
+                label = "工具",
+                selected = selectedTab == AppTab.Tools,
+                enabled = !isMiniPlayer,
+                onClick = { onSelectTab(AppTab.Tools) },
+                modifier = Modifier
+                    .align(Alignment.CenterEnd)
+                    .padding(
+                        end = BottomBarSidePadding + AppSize.bottomBarTabHitSize + BottomBarTabGroupGap,
+                    )
+                    .graphicsLayer { alpha = 1f - morph.value },
+                icon = { tint -> ToolsGlyph(modifier = Modifier.size(BottomBarTabIconSize), tint = tint) },
+            )
+            BottomBarTab(
+                label = "本地",
                 selected = selectedTab == AppTab.Library,
                 enabled = !isMiniPlayer,
                 onClick = { onSelectTab(AppTab.Library) },
                 modifier = Modifier
                     .align(Alignment.CenterEnd)
                     .padding(end = BottomBarSidePadding)
-                    .alpha(1f - morph),
-                icon = { tint -> LocalLibraryGlyph(modifier = Modifier.size(AppIconSize.icon22), tint = tint) },
+                    .graphicsLayer { alpha = 1f - morph.value },
+                icon = { tint -> LocalLibraryGlyph(modifier = Modifier.size(BottomBarTabIconSize), tint = tint) },
             )
 
             // ── ②-c 封面（两态共用**同一个**元素，靠位移实现「左滑」，保证视觉连续） ──
@@ -295,7 +332,9 @@ fun AppBottomBar(
                 modifier = Modifier
                     .align(Alignment.CenterStart)
                     .offset {
-                        IntOffset(with(density) { coverLeft.toPx() }.roundToInt(), 0)
+                        val t = morph.value
+                        val left = centerLeft * (1f - t) + BottomBarMiniCoverStart * t
+                        IntOffset(left.roundToPx(), 0)
                     },
             )
         }
@@ -388,33 +427,76 @@ private fun BottomBarCover(
  * @param tint 取色染色来源，跟随当前封面主色锚点（由调用方做 900ms 补间）。
  * @param coverUrl 当前封面；空串时跳过封面层，只留遮罩与渐变。
  */
+private const val BarGlassCoverCrossFadeMs = 900
+
 @Composable
 private fun BottomBarGlass(
     shape: Shape,
-    tint: Color,
+    tint: State<Color>,
     coverUrl: String,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
     val context = LocalContext.current
     val imageLoader = remember(context) { context.imageLoader }
-    var backdrop by remember(coverUrl) { mutableStateOf<ImageBitmap?>(null) }
+    var shown by remember { mutableStateOf<ImageBitmap?>(null) }
+    var fadingOut by remember { mutableStateOf<ImageBitmap?>(null) }
+    val crossFade = remember { Animatable(1f) }
 
     LaunchedEffect(coverUrl) {
-        backdrop = null
-        if (coverUrl.isEmpty()) return@LaunchedEffect
-        backdrop = withContext(Dispatchers.IO) {
-            runCatching {
-                imageLoader.execute(
-                    ImageRequest.Builder(context)
-                        .data(coverUrl)
-                        // 解码尺寸给目标宽度的两倍，留一点余量给 ≤80px 的 clamp
-                        .size(BarGlassSpec.BACKDROP_MAX_WIDTH * 2)
-                        .allowHardware(false)
-                        .build(),
-                ).drawable?.toBitmap()?.let { BarGlassSpec.backdrop(it).asImageBitmap() }
-            }.getOrNull()
+        val next = if (coverUrl.isEmpty()) {
+            null
+        } else {
+            withContext(Dispatchers.IO) {
+                runCatching {
+                    imageLoader.execute(
+                        ImageRequest.Builder(context)
+                            .data(coverUrl)
+                            .size(BarGlassSpec.BACKDROP_MAX_WIDTH * 2)
+                            .allowHardware(false)
+                            .build(),
+                    ).drawable?.toBitmap()?.let { BarGlassSpec.backdrop(it).asImageBitmap() }
+                }.getOrNull()
+            }
         }
+        val old = shown
+        shown = next
+        if (old != null && next != null && old !== next) {
+            fadingOut = old
+            crossFade.snapTo(0f)
+            crossFade.animateTo(
+                targetValue = 1f,
+                animationSpec = tween(BarGlassCoverCrossFadeMs, easing = LinearEasing),
+            )
+            fadingOut = null
+        } else {
+            crossFade.snapTo(1f)
+        }
+    }
+
+    fun DrawScope.drawCover(source: ImageBitmap, w: Float, h: Float, alpha: Float) {
+        if (w <= 1f || h <= 1f) return
+        val srcW = source.width
+        val srcH = source.height
+        val dstRatio = w / h
+        val srcRatio = srcW.toFloat() / srcH
+        val cropW: Int
+        val cropH: Int
+        if (srcRatio > dstRatio) {
+            cropH = srcH
+            cropW = min(srcW, (srcH * dstRatio).roundToInt()).coerceAtLeast(1)
+        } else {
+            cropW = srcW
+            cropH = min(srcH, (srcW / dstRatio).roundToInt()).coerceAtLeast(1)
+        }
+        drawImage(
+            image = source,
+            srcOffset = IntOffset((srcW - cropW) / 2, (srcH - cropH) / 2),
+            srcSize = IntSize(cropW, cropH),
+            dstSize = IntSize(w.roundToInt().coerceAtLeast(1), h.roundToInt().coerceAtLeast(1)),
+            alpha = alpha,
+            filterQuality = FilterQuality.Low,
+        )
     }
 
     Box(
@@ -427,63 +509,34 @@ private fun BottomBarGlass(
                 height = BarGlassSpec.REFRACTION_HEIGHT_DP.dp,
                 amount = BarGlassSpec.REFRACTION_AMOUNT_DP.dp,
             )
-            .drawBehind {
-                val source = backdrop
-                val w = size.width
-                val h = size.height
+            .drawWithCache {
+                val overlayBrush = Brush.verticalGradient(
+                    listOf(
+                        Color.White.copy(alpha = BarGlassSpec.OVERLAY_TOP_WHITE),
+                        Color.Transparent,
+                        Color.Black.copy(alpha = BarGlassSpec.OVERLAY_BOTTOM_BLACK),
+                    ),
+                )
+                val tintBrush = Brush.verticalGradient(
+                    listOf(
+                        Color.Black.copy(alpha = BarGlassSpec.TINT_TOP_BLACK),
+                        tint.value.copy(alpha = BarGlassSpec.TINT_MIDDLE),
+                        Color.Black.copy(alpha = BarGlassSpec.TINT_BOTTOM_BLACK),
+                    ),
+                )
+                onDrawBehind {
+                    val w = size.width
+                    val h = size.height
 
-                // ① 封面层：centerCrop 铺满 + alpha 0.86
-                if (source != null && w > 1f && h > 1f) {
-                    val srcW = source.width
-                    val srcH = source.height
-                    val dstRatio = w / h
-                    val srcRatio = srcW.toFloat() / srcH
-                    val cropW: Int
-                    val cropH: Int
-                    if (srcRatio > dstRatio) {
-                        cropH = srcH
-                        cropW = min(srcW, (srcH * dstRatio).roundToInt()).coerceAtLeast(1)
-                    } else {
-                        cropW = srcW
-                        cropH = min(srcH, (srcW / dstRatio).roundToInt()).coerceAtLeast(1)
+                    fadingOut?.let { drawCover(it, w, h, BarGlassSpec.COVER_ALPHA) }
+                    shown?.let {
+                        drawCover(it, w, h, BarGlassSpec.COVER_ALPHA * crossFade.value)
                     }
-                    drawImage(
-                        image = source,
-                        srcOffset = IntOffset((srcW - cropW) / 2, (srcH - cropH) / 2),
-                        srcSize = IntSize(cropW, cropH),
-                        dstSize = IntSize(
-                            w.roundToInt().coerceAtLeast(1),
-                            h.roundToInt().coerceAtLeast(1),
-                        ),
-                        alpha = BarGlassSpec.COVER_ALPHA,
-                        filterQuality = FilterQuality.Low,
-                    )
+
+                    drawRect(Color.Black.copy(alpha = BarGlassSpec.SCRIM_ALPHA))
+                    drawRect(overlayBrush)
+                    drawRect(tintBrush)
                 }
-
-                // ② 压黑 32%：把封面沉下去，保证文字可读
-                drawRect(Color.Black.copy(alpha = BarGlassSpec.SCRIM_ALPHA))
-
-                // ③ [White 0.035, Transparent, Black 0.07]
-                drawRect(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.White.copy(alpha = BarGlassSpec.OVERLAY_TOP_WHITE),
-                            Color.Transparent,
-                            Color.Black.copy(alpha = BarGlassSpec.OVERLAY_BOTTOM_BLACK),
-                        ),
-                    ),
-                )
-
-                // ④ [Black 0.18, 取色 0.22, Black 0.24]
-                drawRect(
-                    Brush.verticalGradient(
-                        listOf(
-                            Color.Black.copy(alpha = BarGlassSpec.TINT_TOP_BLACK),
-                            tint.copy(alpha = BarGlassSpec.TINT_MIDDLE),
-                            Color.Black.copy(alpha = BarGlassSpec.TINT_BOTTOM_BLACK),
-                        ),
-                    ),
-                )
             }
             // 迷你态：整条底栏任意位置都进播放页（元素之间的空白也是）；
             // 底栏态仍是空实现，只屏蔽穿透到下层列表。
@@ -492,35 +545,57 @@ private fun BottomBarGlass(
 }
 
 /**
- * 底栏 tab 按钮：48dp 命中区（外层，唯一 clickable）+ 40dp 选中胶囊（内层，纯视觉）。
- * 选中态用「主色 15% 胶囊 + 纯白图标」，未选中用「透明 + whiteA45 图标」，不额外加文字。
+ * 底栏 tab 按钮：命中区撑满胶囊内容高度（外层，唯一 clickable）+ 居中的视觉块（内层）。
+ *
+ * 视觉块高度由 [BottomBarTabContentHeight] 定死 = 封面边长 75%（45dp），里面图标 [BottomBarTabIconSize]
+ * 在上、10sp 标签在下，整块在 60dp 高的胶囊里垂直居中 —— 所以「按钮在胶囊中间」是几何保证，
+ * 不靠 padding 凑。选中态用「主色 15% 胶囊 + 纯白图标」，未选中「透明 + whiteA45」。
+ *
  * [enabled] 为 false 时（迷你播放器态）**完全不挂 clickable**（不是挂空实现）——
  * 否则淡出后仍是透明热区，会截走「点整条底栏进播放页」的点击。
  */
 @Composable
 private fun BottomBarTab(
+    label: String,
     selected: Boolean,
     enabled: Boolean,
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
     icon: @Composable (Color) -> Unit,
 ) {
+    val tint = if (selected) AppColors.white else AppColors.whiteA45
     Box(
         modifier = modifier
-            .size(AppSize.bottomBarTabHitSize)
+            .width(AppSize.bottomBarTabHitSize)
+            .height(AppSize.bottomBarHeight)
             .then(if (enabled) Modifier.clickableNoRipple(onClick) else Modifier),
         contentAlignment = Alignment.Center,
     ) {
         Box(
             modifier = Modifier
-                .size(AppSize.bottomBarTabPillSize)
+                .heightIn(min = BottomBarTabContentHeight)
                 .background(
                     color = if (selected) AppColors.primaryA15 else Color.Transparent,
                     shape = RoundedCornerShape(AppRadius.r10),
-                ),
+                )
+                .padding(horizontal = AppSpacing.sp6)
+                .padding(vertical = AppSpacing.sp2),
             contentAlignment = Alignment.Center,
         ) {
-            icon(if (selected) AppColors.white else AppColors.whiteA45)
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center,
+            ) {
+                icon(tint)
+                Spacer(modifier = Modifier.height(AppSpacing.sp2))
+                Text(
+                    text = label,
+                    color = tint,
+                    fontSize = AppFontSize.size10,
+                    fontWeight = FontWeight.Medium,
+                    maxLines = 1,
+                )
+            }
         }
     }
 }

@@ -46,6 +46,7 @@ import com.annieplayer.annie_music.kt.data.favorites.FavArtist
 import com.annieplayer.annie_music.kt.data.favorites.FavPlaylist
 import com.annieplayer.annie_music.kt.data.favorites.FavoriteMode
 import com.annieplayer.annie_music.kt.data.favorites.UserPlaylist
+import com.annieplayer.annie_music.kt.data.favorites.fallbackCover
 import com.annieplayer.annie_music.kt.data.local.LocalTrackMeta
 import com.annieplayer.annie_music.kt.data.local.albumGroupKey
 import com.annieplayer.annie_music.kt.data.local.artistGroupKeys
@@ -614,7 +615,7 @@ private sealed interface PlaylistEntry {
     class Mine(val playlist: UserPlaylist) : PlaylistEntry {
         override val key: String get() = "u:${playlist.id}"
         override val name: String get() = playlist.name
-        override val cover: String get() = playlist.cover
+        override val cover: String get() = playlist.fallbackCover
         override val subtitle: String get() = "${playlist.songs.size} 首"
         override val addedAt: Long get() = playlist.createdAt
     }

@@ -37,6 +37,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.lifecycle.Lifecycle
@@ -55,13 +56,17 @@ import com.annieplayer.annie_music.kt.core.routing.PageCloseRelay
 import com.annieplayer.annie_music.kt.core.routing.handleBack
 import com.annieplayer.annie_music.kt.core.state.AppShellViewModel
 import com.annieplayer.annie_music.kt.core.state.AlbumRoute
-import com.annieplayer.annie_music.kt.core.state.KkboxRoute
 import com.annieplayer.annie_music.kt.core.state.PlaylistRoute
-import com.annieplayer.annie_music.kt.core.state.QobuzRoute
 import com.annieplayer.annie_music.kt.core.state.SingerRoute
 import com.annieplayer.annie_music.kt.core.state.toOverlayFlags
 import com.annieplayer.annie_music.kt.core.state.AppTab
 import com.annieplayer.annie_music.kt.core.state.LocalAlbumRoute
+import com.annieplayer.annie_music.kt.core.state.LocalLyricImportRoute
+import com.annieplayer.annie_music.kt.core.state.LocalLyricSearchRoute
+import com.annieplayer.annie_music.kt.core.state.LyricImportSource
+import com.annieplayer.annie_music.kt.core.state.LocalMetadataSearchRoute
+import com.annieplayer.annie_music.kt.core.state.LocalTagImportRoute
+import com.annieplayer.annie_music.kt.core.state.LocalTrackEditRoute
 import com.annieplayer.annie_music.kt.core.state.LocalArtistAlbumsRoute
 import com.annieplayer.annie_music.kt.core.state.LocalArtistRoute
 import com.annieplayer.annie_music.kt.core.state.LocalArtistSongsRoute
@@ -80,14 +85,25 @@ import com.annieplayer.annie_music.kt.features.favorites.FavoritesScreen
 import com.annieplayer.annie_music.kt.features.library.LocalLibraryScreen
 import com.annieplayer.annie_music.kt.features.library.LocalLibraryViewModel
 import com.annieplayer.annie_music.kt.features.library.LocalOverlayFrame
+import com.annieplayer.annie_music.kt.features.library.LocalStaticBackdrop
 import com.annieplayer.annie_music.kt.features.library.LocalRecentListScreen
+import com.annieplayer.annie_music.kt.features.library.LocalLyricImportScreen
+import com.annieplayer.annie_music.kt.features.library.LocalMetadataSearchScreen
+import com.annieplayer.annie_music.kt.features.library.LocalScanSheet
+import com.annieplayer.annie_music.kt.features.library.LocalTagImportScreen
+import com.annieplayer.annie_music.kt.features.library.MetadataSearchMode
+import com.annieplayer.annie_music.kt.features.library.LocalTrackEditScreen
 import com.annieplayer.annie_music.kt.core.state.ColorViewModel
 import com.annieplayer.annie_music.kt.core.state.DownloadViewModel
 import com.annieplayer.annie_music.kt.core.state.KkboxViewModel
 import com.annieplayer.annie_music.kt.core.state.MoreSettings
+import com.annieplayer.annie_music.kt.core.state.MultiSelectOrigin
+import com.annieplayer.annie_music.kt.core.state.MultiSelectSheetState
+import com.annieplayer.annie_music.kt.data.favorites.PlaylistScope
 import com.annieplayer.annie_music.kt.core.state.PlayerViewModel
 import com.annieplayer.annie_music.kt.core.state.QobuzViewModel
 import com.annieplayer.annie_music.kt.core.state.SearchSelectionViewModel
+import com.annieplayer.annie_music.kt.core.state.SingerDetailCache
 import com.annieplayer.annie_music.kt.core.state.TranslatePicker
 import com.annieplayer.annie_music.kt.core.state.UiViewModel
 import com.annieplayer.annie_music.kt.core.util.cancelPending
@@ -98,10 +114,10 @@ import com.annieplayer.annie_music.kt.data.CacheItem
 import com.annieplayer.annie_music.kt.data.DownloadDirService
 import com.annieplayer.annie_music.kt.data.DownloadService
 import com.annieplayer.annie_music.kt.data.local.LocalLibraryStore
+import com.annieplayer.annie_music.kt.data.local.TagEditForm
 import com.annieplayer.annie_music.kt.data.model.LoopMode
 import com.annieplayer.annie_music.kt.data.model.Quality
 import com.annieplayer.annie_music.kt.data.source.LxPluginRegistry
-import com.annieplayer.annie_music.kt.features.kkbox.KkboxDetailScreen
 import com.annieplayer.annie_music.kt.data.model.MusicPlatform
 import com.annieplayer.annie_music.kt.data.playQualityLabelOf
 import com.annieplayer.annie_music.kt.data.playQualityTiersOf
@@ -112,14 +128,26 @@ import com.annieplayer.annie_music.kt.data.sources.qobuz.qobuzTokenProvider
 import com.annieplayer.annie_music.kt.features.playlist.PlaylistParseScreen
 import com.annieplayer.annie_music.kt.features.playlist.PlaylistParseScreenState
 import com.annieplayer.annie_music.kt.features.player.PlayerScreen
-import com.annieplayer.annie_music.kt.features.qobuz.QobuzDetailScreen
+import com.annieplayer.annie_music.kt.features.player.PlayerScreen
 import com.annieplayer.annie_music.kt.core.state.HomeShelfRoute
+import com.annieplayer.annie_music.kt.core.state.QobuzSeeAllRoute
+import com.annieplayer.annie_music.kt.core.state.QobuzTagRoute
 import com.annieplayer.annie_music.kt.core.state.KugouStyleRoute
+import com.annieplayer.annie_music.kt.core.state.RankDetailRoute
 import com.annieplayer.annie_music.kt.core.state.toRoute
+import com.annieplayer.annie_music.kt.features.home.AppleRankState
 import com.annieplayer.annie_music.kt.features.home.HomeFeedState
 import com.annieplayer.annie_music.kt.features.home.HomeScreen
 import com.annieplayer.annie_music.kt.features.home.HomeShelfAllSheet
 import com.annieplayer.annie_music.kt.features.home.KugouStyleSheet
+import com.annieplayer.annie_music.kt.features.home.NewTabRoomScreen
+import com.annieplayer.annie_music.kt.features.home.NewTabRoomState
+import com.annieplayer.annie_music.kt.features.home.QobuzDiscoverState
+import com.annieplayer.annie_music.kt.features.home.QobuzSeeAllScreen
+import com.annieplayer.annie_music.kt.features.home.QobuzTagScreen
+import com.annieplayer.annie_music.kt.features.home.NewTabState
+import com.annieplayer.annie_music.kt.features.home.RankDetailScreen
+import com.annieplayer.annie_music.kt.features.home.RankState
 import com.annieplayer.annie_music.kt.features.search.SearchScreenState
 import com.annieplayer.annie_music.kt.features.details.DetailNavigator
 import com.annieplayer.annie_music.kt.ui.theme.Annie
@@ -139,6 +167,8 @@ import com.annieplayer.annie_music.kt.widgets.KkboxAccountSheet
 import com.annieplayer.annie_music.kt.widgets.LxImportUrlDialog
 import com.annieplayer.annie_music.kt.widgets.LxPluginManagerSheet
 import com.annieplayer.annie_music.kt.widgets.LocalDetailQualityPickerHost
+import com.annieplayer.annie_music.kt.widgets.LocalSongLike
+import com.annieplayer.annie_music.kt.widgets.SongLikeBridge
 import com.annieplayer.annie_music.kt.widgets.MenuDrawer
 import com.annieplayer.annie_music.kt.widgets.MenuDrawerCacheSize
 import com.annieplayer.annie_music.kt.widgets.PlayerOverlay
@@ -148,9 +178,11 @@ import com.annieplayer.annie_music.kt.widgets.QobuzTokenSheet
 import com.annieplayer.annie_music.kt.features.downloads.DownloadOrchestrator
 import com.annieplayer.annie_music.kt.features.downloads.batchDownloadQualities
 import com.annieplayer.annie_music.kt.features.settings.MoreSettingsScreen
+import com.annieplayer.annie_music.kt.features.tools.ToolsScreen
+import com.annieplayer.annie_music.kt.features.tools.remote.LanRemoteSheet
 import com.annieplayer.annie_music.kt.core.audio.AudioRoute
 import com.annieplayer.annie_music.kt.core.audio.AudioDirectProbe
-import com.annieplayer.annie_music.kt.core.audio.OutputPath
+import com.annieplayer.annie_music.kt.core.audio.SinkKind
 import com.annieplayer.annie_music.kt.core.audio.UsbAudioDirect
 import com.annieplayer.annie_music.kt.core.audio.DowngradeNotice
 import com.annieplayer.annie_music.kt.core.audio.DSD_DEFAULT_PCM_RATE
@@ -175,8 +207,9 @@ import com.annieplayer.annie_music.kt.widgets.FollowSourceNoticeDialog
 import com.annieplayer.annie_music.kt.widgets.OutputDowngradeDialog
 import com.annieplayer.annie_music.kt.widgets.DsdOutputSheet
 import com.annieplayer.annie_music.kt.widgets.QueueSheet
-import com.annieplayer.annie_music.kt.widgets.SearchSelectionOverlay
 import com.annieplayer.annie_music.kt.widgets.SingerDetailSheet
+import com.annieplayer.annie_music.kt.widgets.MultiSelectSheet
+import com.annieplayer.annie_music.kt.widgets.PlaylistPickerSheet
 import com.annieplayer.annie_music.kt.widgets.SongActionsSheet
 import com.annieplayer.annie_music.kt.widgets.SourcePickerSheet
 import com.annieplayer.annie_music.kt.widgets.blockTouches
@@ -221,8 +254,6 @@ import java.io.File
  * - Qobuz / KKBOX 链接解析成功后压入全屏详情页（`QobuzDetailScreen` / `KkboxDetailScreen`，
  *   走 `UiState.pageStack` 的 `QobuzRoute` / `KkboxRoute`）；歌单链接解析压入
  *   `PlaylistDetailSheet` 对应的 `PlaylistRoute`；非法链接弹 SnackBar。
- * - 顶栏右侧头像已使用工程内资源 `res/drawable-nodpi/annie.jpg`（`R.drawable.annie`），
- *   不再是音符占位块。
  */
 
 /**
@@ -262,13 +293,39 @@ fun AppShell(
     val uiState by uiViewModel.state.collectAsState()
     val playerState by playerViewModel.state.collectAsState()
     val localLibraryState by localLibraryViewModel.state.collectAsState()
+    val localGroups by localLibraryViewModel.groups.collectAsState()
+    val localScanExcluded by com.annieplayer.annie_music.kt.data.local.LocalScanExclusions.excluded.collectAsState()
     val downloadTasks by downloadViewModel.state.collectAsState()
     val selection by selectionViewModel.state.collectAsState()
     val favoriteSnapshot by favoriteViewModel.snapshot.collectAsState()
+    // 已收藏单曲的键集合：搜索 / 详情行尾的爱心逐行查它（每行一次 contains，不现拼 key）
+    val likedSongKeys = remember(favoriteSnapshot) {
+        favoriteSnapshot.songs.mapTo(HashSet(favoriteSnapshot.songs.size)) { it.key }
+    }
+
+    // 正在播放的**本地**歌，它在曲库里的那条记录（改标签 / 封面重抽完成都会换掉它）。
+    // `currentSong` 是开播那一刻的 Song 快照，曲库更新不会自动回流 —— 这里做一次同步，
+    // 否则「改完标签，播放页还显示旧标题/旧封面，要重新点一次播放才对」。
+    val playingLocalMeta = remember(playerState.currentSong?.id, localLibraryState.tracks) {
+        val id = playerState.currentSong?.id
+        if (id == null || !id.startsWith("local:")) {
+            null
+        } else {
+            localLibraryState.tracks.firstOrNull { it.path == id.removePrefix("local:") }
+        }
+    }
+    LaunchedEffect(playingLocalMeta) {
+        val meta = playingLocalMeta ?: return@LaunchedEffect
+        // reloadLyric = true：改完标签/歌词后这里必须**重读歌词**——
+        // `_ensureLyric` 见到"已有歌词"就跳过，只改歌词时元数据 merge 又是"无变化"，
+        // 两者叠加就会出现「导入/保存完，播放页歌词还是旧的」。
+        playerViewModel.refreshSongMetadata(meta.toSong(), reloadLyric = true)
+    }
 val writeQobuzDownloadTranslation by MoreSettings.writeQobuzDownloadTranslation.collectAsState()
 val writeEnhancedLyrics by MoreSettings.writeEnhancedLyrics.collectAsState()
 val saveLrcFile by MoreSettings.saveLrcFile.collectAsState()
-val outputPath by MoreSettings.outputPath.collectAsState()
+val usbExclusiveState by MoreSettings.usbExclusiveFlow.collectAsState()
+val aaudioExclusiveState by MoreSettings.aaudioExclusiveFlow.collectAsState()
 val outputToggles by MoreSettings.outputToggles.collectAsState()
 // 引擎要在 `tuningOn` 之前读：`tuningEnabled` 需要它（选了「无」= 一票否决）
 val tuningEngine by MoreSettings.tuningEngine.collectAsState()
@@ -277,7 +334,7 @@ val tuningEngine by MoreSettings.tuningEngine.collectAsState()
 // 所以这里必须把路由也喂进去，否则"戴着蓝牙耳机看不到调音"。
 // **引擎也必须喂**：选了「无」就是一票否决，与通路无关。
 val tuningOn = com.annieplayer.annie_music.kt.core.audio.tuningEnabled(
-    outputPath,
+    usbExclusiveState,
     outputToggles,
     bluetooth = playerState.audioStatus?.route == AudioRoute.bluetooth,
     engine = tuningEngine,
@@ -424,9 +481,15 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
     // 主页内容状态：与 st 同层持有 —— 切 tab / 切「主页 ↔ 搜索」形态都不重建，
     // 回到首页时不会重新请求一遍。平台由 `st.searchPlatform` 驱动（见 HomeScreen）。
     val homeFeedSt = remember(scope) { HomeFeedState() }
+    val rankFeedSt = remember(scope) { RankState() }
+    val newTabSt = remember(scope) { NewTabState() }
+    val appleRankSt = remember(scope) { AppleRankState() }
+    val qobuzDiscoverSt = remember(scope) { QobuzDiscoverState() }
+    val newTabRoomSt = remember(scope) { NewTabRoomState() }
 
     // 「所有文件访问」权限状态：抽屉打开时重新检测（对齐 Flutter `_ManageStorageRow._granted`）
     val ctx = LocalContext.current
+    val uriHandler = LocalUriHandler.current
     // USB 访问权限：`USB_DEVICE_ATTACHED` 只是把本应用列进系统的设备选择器，
     // **不等于授权** —— 不走一遍 `requestPermission`，`openDevice` 永远返回 null，
     // 表现就是"插了 DAC 但应用说检测不到"。启动时补一次，插拔后由 ON_RESUME 再补。
@@ -608,7 +671,7 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
     }
 
     val currentSong = playerState.currentSong
-                val toastId = dl.downloadingId
+    val toastId = if (dl.activeDownloads <= 1) dl.downloadingId else null
 
     // 系统导航 / 手势条底部 inset。注意：直接读取的 WindowInsets 不会被父级 padding
     // 「消费」清零（`asPaddingValues()` 不感知 ModifierLocalConsumedWindowInsets，已对
@@ -642,6 +705,8 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
     // （两者互斥、画在同一槽位，不会同时出现）。
     val isPrimaryPage = !anyOverlayVisible
     // 菜单抽屉及其子页面（设置 / 下载 / 缓存 / 插件 / 账号）一律不显示底部胶囊（含迷你播放态）
+    // 「导入元数据」页同样不显示：它自己的取消/导入按钮就占在底栏那个位置，
+    // 两个东西叠在一起会互相压住（而且那是"选完就走"的页面，不需要播放器在旁边）。
     val hideBottomBar = uiState.drawerVisible ||
         uiState.moreSettingsVisible ||
         uiState.lxPluginManagerVisible ||
@@ -650,7 +715,11 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
         uiState.qobuzTokenVisible ||
         uiState.kkboxAccountVisible ||
         uiState.cacheClearVisible ||
-        uiState.contactVisible
+        uiState.contactVisible ||
+        uiState.localScanVisible ||
+        uiState.lanRemoteVisible ||
+        uiState.pageStack.lastOrNull() is LocalTagImportRoute ||
+        uiState.pageStack.lastOrNull() is LocalLyricImportRoute
     Scaffold(
         modifier = modifier.fillMaxSize(),
         containerColor = AppColors.background,
@@ -670,6 +739,13 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
         CompositionLocalProvider(
             LocalCoverThemePalette provides coverThemePalette,
             LocalAmbientCoverUrl provides themeCoverUrl,
+            // 行尾爱心（`SongRowActions`）的收藏状态与开关：一次注入，所有行共享
+            LocalSongLike provides SongLikeBridge(
+                likedKeys = likedSongKeys,
+                onToggleSong = { song -> favoriteViewModel.toggleSong(song) },
+                // 「我喜欢」列表的斜杠爱心：只做幂等移除，不弹提示（要加回来去任意页面点 ♡）
+                onRemoveSong = { song -> favoriteViewModel.unlikeSong(song) },
+            ),
         ) {
         Box(modifier = Modifier.fillMaxSize()) {
             // 覆盖层可见性快照：**在这里算一次**，三个返回裁决点共用同一份。
@@ -681,7 +757,6 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
             val overlayFlags = uiState.toOverlayFlags(
                 translatePicker = translatePickerVisible,
                 sourcePicker = st.sourcePickerVisible,
-                searchSelectionOverlay = selection.overlayVisible,
                 searchSelection = selection.selectedSongs.isNotEmpty(),
             )
 
@@ -719,11 +794,6 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                 }
             }
 
-            // 搜索页「待下载」面板：返回先收面板（它的关闭按钮是唯一可见出口，别逼用户去找）。
-            BackHandler(enabled = handleBack(overlayFlags) == BackTarget.SEARCH_SELECTION_OVERLAY) {
-                selectionViewModel.setOverlayVisible(false)
-            }
-
             // 搜索页多选态：返回先退多选（清空勾选），而不是把搜索态 / 整个 App 收掉。
             // 与详情页的多选同一条规则：**多选是一种形态，返回第一下永远只退这一层**。
             BackHandler(enabled = handleBack(overlayFlags) == BackTarget.SEARCH_SELECTION) {
@@ -737,32 +807,56 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
             // 于是「曲库滑到一半 → 切走 → 切回来」会回到顶部。SaveableStateProvider 按
             // tab 保存 / 恢复这些 saveable 状态，滚动位置、展开状态都能原样回来。
             // 注意它只能保住 `rememberSaveable` 的东西；ViewModel 里的数据本来就跨 tab 存活。
-            tabStateHolder.SaveableStateProvider(selectedTab) {
-                when (selectedTab) {
-                    AppTab.Home -> HomeScreen(
-                        modifier = Modifier.fillMaxSize(),
-                        st = st,
-                        homeFeed = homeFeedSt,
-                        dl = dl,
-                        uiViewModel = uiViewModel,
-                        selectionViewModel = selectionViewModel,
-                        uiState = uiState,
-                        selection = selection,
-                        downloadTasks = downloadTasks,
-                        currentSong = currentSong,
-                    )
+            Box(modifier = Modifier.fillMaxSize()) {
+                // 背景必须声明在 `SaveableStateProvider` **外面**。
+                //
+                // `SaveableStateProvider(key)` 内部是 `ReusableContent(key)`：key（= tab）一变，
+                // 它包裹的整棵子树按新 key 重建，`remember` 全部归零 —— 背景若放在里面，
+                // 每次切 tab 都会新建一个 `CoverPaletteBackdrop`：canvasSize 从 0 开始 → 首帧只有
+                // `background(base)` 那层纯底色 → 下一帧才烤出极光并淡入，这就是「忽闪一下变颜色」。
+                //
+                // 放到外面后它是**进程内唯一的一份**：切 tab 只换上面那层内容，背景不重建、
+                // 不重烤、不淡入；换歌时仍由它自己走 560ms 封面交叉淡化 + 360ms 底色补间。
+                LocalStaticBackdrop(modifier = Modifier.fillMaxSize())
+                tabStateHolder.SaveableStateProvider(selectedTab) {
+                    when (selectedTab) {
+                        AppTab.Home -> HomeScreen(
+                            modifier = Modifier.fillMaxSize(),
+                            st = st,
+                            homeFeed = homeFeedSt,
+                            rankFeed = rankFeedSt,
+                            newTab = newTabSt,
+                            appleRank = appleRankSt,
+                            qobuzDiscover = qobuzDiscoverSt,
+                            dl = dl,
+                            uiViewModel = uiViewModel,
+                            selectionViewModel = selectionViewModel,
+                            uiState = uiState,
+                            selection = selection,
+                            downloadTasks = downloadTasks,
+                            currentSong = currentSong,
+                        )
 
-                    AppTab.Favorites -> FavoritesScreen(
-                        // 顶栏左侧菜单按钮：与主页 / 曲库页同一个动作（打开菜单抽屉）
-                        onOpenMenu = { uiViewModel.setDrawerVisible(true) },
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                        AppTab.Favorites -> FavoritesScreen(
+                            // 顶栏左侧菜单按钮：与主页 / 曲库页同一个动作（打开菜单抽屉）
+                            onOpenMenu = { uiViewModel.setDrawerVisible(true) },
+                            modifier = Modifier.fillMaxSize(),
+                        )
 
-                    AppTab.Library -> LocalLibraryScreen(
-                        // 顶栏左侧菜单按钮：与主页同一个动作（打开菜单抽屉）
-                        onOpenMenu = { uiViewModel.setDrawerVisible(true) },
-                        modifier = Modifier.fillMaxSize(),
-                    )
+                        AppTab.Library -> LocalLibraryScreen(
+                            // 顶栏左侧菜单按钮：与主页同一个动作（打开菜单抽屉）
+                            onOpenMenu = { uiViewModel.setDrawerVisible(true) },
+                            modifier = Modifier.fillMaxSize(),
+                            // 本页的多选是页内状态（L3），但它位于 tab 内、注册晚于宿主的浮层处理器；
+                            // 不把「上面还有没有浮层」交进去，返回会被多选吃掉，面板关不掉。
+                            backToSelectMode = handleBack(overlayFlags) == BackTarget.NONE,
+                        )
+
+                        AppTab.Tools -> ToolsScreen(
+                            onOpenMenu = { uiViewModel.setDrawerVisible(true) },
+                            modifier = Modifier.fillMaxSize(),
+                        )
+                    }
                 }
             }
             // ── 详情浮层（RN zIndex 150） ──
@@ -770,14 +864,6 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
             // AppBottomBar 之后统一渲染（见下方槽位），保证面板盖在迷你播放条之上。
             CompositionLocalProvider(LocalDetailQualityPickerHost provides detailPickerHost) {
             GlobalOverlays(
-                searchSelectionOverlay = {
-                    SearchSelectionOverlay(
-                        visible = selection.overlayVisible,
-                        songs = selection.selectedSongs,
-                        onClose = { selectionViewModel.setOverlayVisible(false) },
-                        onRemove = { id -> selectionViewModel.removeSong(id) },
-                    )
-                },
                 pageStack = {
                     // 详情真栈：按栈底→栈顶顺序渲染，后声明者绘制在上层、其 BackHandler 也先消费返回。
                     // key(entry.key) 用条目唯一键维持每个详情在重组中的身份（同类型多层互不干扰）。
@@ -881,6 +967,25 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                                     },
                                 )
 
+                                is QobuzSeeAllRoute -> QobuzSeeAllScreen(
+                                    data = entry.data,
+                                    isTop = localTop,
+                                    onClose = { uiViewModel.popRoute() },
+                                    onOpenTarget = { target ->
+                                        uiViewModel.pushRoute(target.toRoute())
+                                    },
+                                )
+
+                                is QobuzTagRoute -> QobuzTagScreen(
+                                    slug = entry.slug,
+                                    title = entry.title,
+                                    isTop = localTop,
+                                    onClose = { uiViewModel.popRoute() },
+                                    onOpenTarget = { target ->
+                                        uiViewModel.pushRoute(target.toRoute())
+                                    },
+                                )
+
                                 // 酷狗「按风格听」的流派二级页：点谁拉谁（主页只放卡，不发请求）
                                 is KugouStyleRoute -> KugouStyleSheet(
                                     tagIds = entry.tagIds,
@@ -892,6 +997,45 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                                     onPlay = { song, queue -> with(st) { handlePlaySong(song, queue) } },
                                     onMore = { song -> dl.openActions(song) },
                                 )
+
+                                is RankDetailRoute -> RankDetailScreen(
+                                    route = entry,
+                                    isTop = localTop,
+                                    onClose = { uiViewModel.popRoute() },
+                                    uiViewModel = uiViewModel,
+                                    playerViewModel = playerViewModel,
+                                    downloadViewModel = downloadViewModel,
+                                )
+
+                                is com.annieplayer.annie_music.kt.core.state.NewTabRoomRoute ->
+                                    NewTabRoomScreen(
+                                        route = entry,
+                                        onClose = { uiViewModel.popRoute() },
+                                        roomState = newTabRoomSt,
+                                        currentSongId = currentSong?.id,
+                                        onPlaySong = { song, queue ->
+                                            with(st) { handlePlaySong(song, queue) }
+                                        },
+                                        onMore = { song -> dl.openActions(song) },
+                                        onOpenTarget = { target ->
+                                            uiViewModel.pushRoute(target.toRoute())
+                                        },
+                                    )
+
+                                is com.annieplayer.annie_music.kt.core.state.AppleRankRoomRoute ->
+                                    com.annieplayer.annie_music.kt.features.home.AppleRankRoomScreen(
+                                        route = entry,
+                                        onClose = { uiViewModel.popRoute() },
+                                        state = appleRankSt,
+                                        currentSongId = currentSong?.id,
+                                        onPlaySong = { song, queue ->
+                                            with(st) { handlePlaySong(song, queue) }
+                                        },
+                                        onMore = { song -> dl.openActions(song) },
+                                        onOpenTarget = { target ->
+                                            uiViewModel.pushRoute(target.toRoute())
+                                        },
+                                    )
 
                                 // ── 收藏库的子页面：同样并进这条 pageStack ──
                                 is com.annieplayer.annie_music.kt.core.state.FavoriteSectionRoute ->
@@ -933,23 +1077,29 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                                         com.annieplayer.annie_music.kt.data.local.LocalSection.artists ->
                                             LocalArtistListScreen(
                                                 tracks = localLibraryState.tracks,
+                                                groupsAll = localGroups,
                                                 isTop = localTop,
                                                 onClose = requestClose,
                                                 onOpenArtist = { uiViewModel.pushRoute(LocalArtistRoute(it)) },
+                                                onRequestCover = { localLibraryViewModel.requestCover(it) },
                                             )
                                         com.annieplayer.annie_music.kt.data.local.LocalSection.albums ->
                                             LocalAlbumListScreen(
                                                 tracks = localLibraryState.tracks,
+                                                groupsAll = localGroups,
                                                 isTop = localTop,
                                                 onClose = requestClose,
                                                 onOpenAlbum = { uiViewModel.pushRoute(LocalAlbumRoute(it)) },
+                                                onRequestCover = { localLibraryViewModel.requestCover(it) },
                                             )
                                         com.annieplayer.annie_music.kt.data.local.LocalSection.folders ->
                                             LocalFolderListScreen(
                                                 tracks = localLibraryState.tracks,
+                                                groupsAll = localGroups,
                                                 isTop = localTop,
                                                 onClose = requestClose,
                                                 onOpenFolder = { uiViewModel.pushRoute(LocalFolderRoute(it)) },
+                                                onRequestCover = { localLibraryViewModel.requestCover(it) },
                                             )
                                         else -> LocalRecentListScreen(
                                             tracks = localLibraryState.tracks,
@@ -960,6 +1110,7 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                                                 playerViewModel.setQueue(list.map { it.toSong() }, idx)
                                             },
                                             onMore = { uiViewModel.setSongActionsVisible(true, it.toSong()) },
+                                            onRequestCover = { localLibraryViewModel.requestCover(it) },
                                         )
                                     }
                                 }
@@ -1057,6 +1208,154 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                                     )
                                 }
 
+                                // ── 单曲「编辑元数据」：从歌曲详情面板底部进入 ──
+                                // 只带 path，内容从 `localLibraryState.tracks` 现取：
+                                // 保存成功后 VM 更新 → 本页立即显示新值。
+                                is LocalTrackEditRoute -> LocalLibraryDetailHost(
+                                    isTop = localTop,
+                                    onClose = { uiViewModel.popRoute() },
+                                ) { requestClose ->
+                                    LocalTrackEditScreen(
+                                        path = entry.path,
+                                        tracks = localLibraryState.tracks,
+                                        isTop = localTop,
+                                        onClose = requestClose,
+                                        onApply = { bag, lrc ->
+                                            localLibraryViewModel.applyTagEdit(entry.path, bag, lrc)
+                                        },
+                                        onExportLrc = { lyric ->
+                                            localLibraryViewModel.exportSidecarLyric(entry.path, lyric)
+                                        },
+                                        onExportCover = { cover ->
+                                            localLibraryViewModel.exportSidecarCover(entry.path, cover)
+                                        },
+                                        onOpenSearch = {
+                                            uiViewModel.pushRoute(LocalMetadataSearchRoute(entry.path))
+                                        },
+                                        onOpenLyricSearch = {
+                                            uiViewModel.pushRoute(LocalLyricSearchRoute(entry.path))
+                                        },
+                                        pendingLyric = uiState.pendingLyricImport
+                                            ?.takeIf { it.path == entry.path }
+                                            ?.lyric,
+                                        onLyricConsumed = { uiViewModel.clearPendingLyricImport() },
+                                        importedForm = uiState.pendingTagImport
+                                            ?.takeIf { it.path == entry.path }
+                                            ?.form,
+                                        onImportedConsumed = { uiViewModel.clearPendingTagImport() },
+                                    )
+                                }
+
+                                // ── 搜索元数据：从编辑页顶栏的搜索图标进入 ──
+                                is LocalMetadataSearchRoute -> LocalLibraryDetailHost(
+                                    isTop = localTop,
+                                    onClose = { uiViewModel.popRoute() },
+                                ) { requestClose ->
+                                    LocalMetadataSearchScreen(
+                                        path = entry.path,
+                                        tracks = localLibraryState.tracks,
+                                        isTop = localTop,
+                                        onClose = requestClose,
+                                        onOpenImport = { song ->
+                                            uiViewModel.pushRoute(
+                                                LocalTagImportRoute(entry.path, song),
+                                            )
+                                        },
+                                    )
+                                }
+
+                                // ── 导入元数据：搜索结果点进来（与编辑页/搜索页同一条栈）──
+                                // 导入是"选完就走"：写一次性槽 → 连退两层（导入页 → 搜索页）
+                                // 回到编辑页；写盘仍由编辑页的保存按钮负责。
+                                is LocalTagImportRoute -> {
+                                    // 点「导入」不再直接两次 popRoute：那样本页会**瞬间消失、没有滑出动画**。
+                                    // 现在先记下待回填的表单 → 走 requestClose 播完 150ms 滑出 →
+                                    // 动画结束的 onClose 里再连退两层（导入页 → 搜索页）并写回填槽。
+                                    var pendingImport by remember(entry.path) {
+                                        mutableStateOf<TagEditForm?>(null)
+                                    }
+                                    LocalLibraryDetailHost(
+                                        isTop = localTop,
+                                        onClose = {
+                                            uiViewModel.popRoute()
+                                            pendingImport?.let { form ->
+                                                uiViewModel.popRoute()
+                                                uiViewModel.setPendingTagImport(entry.path, form)
+                                            }
+                                        },
+                                    ) { requestClose ->
+                                        LocalTagImportScreen(
+                                            path = entry.path,
+                                            candidate = entry.candidate,
+                                            tracks = localLibraryState.tracks,
+                                            onClose = requestClose,
+                                            onImport = { form ->
+                                                pendingImport = form
+                                                requestClose()
+                                            },
+                                        )
+                                    }
+                                }
+
+                                // ── 搜索歌词：与「搜索元数据」同一个页面（mode = Lyric）──
+                                // 平台范围一致（Apple / 网易 / QQ / 酷狗 / 酷我）+ 歌词模式多一个 LRCLIB
+                                // （直连、无需 key，所以它进推荐）；区别还有「点结果之后压哪一页」。
+                                is LocalLyricSearchRoute -> LocalLibraryDetailHost(
+                                    isTop = localTop,
+                                    onClose = { uiViewModel.popRoute() },
+                                ) { requestClose ->
+                                    LocalMetadataSearchScreen(
+                                        path = entry.path,
+                                        tracks = localLibraryState.tracks,
+                                        isTop = localTop,
+                                        onClose = requestClose,
+                                        mode = MetadataSearchMode.Lyric,
+                                        onOpenImport = { song ->
+                                            uiViewModel.pushRoute(
+                                                LocalLyricImportRoute(
+                                                    entry.path,
+                                                    LyricImportSource.Platform(song),
+                                                ),
+                                            )
+                                        },
+                                        onOpenLyricHit = { hit ->
+                                            uiViewModel.pushRoute(
+                                                LocalLyricImportRoute(
+                                                    entry.path,
+                                                    LyricImportSource.Lrclib(hit),
+                                                ),
+                                            )
+                                        },
+                                    )
+                                }
+
+                                // ── 导入歌词：对比后只回填歌词（与导入元数据同一套动画/出栈）──
+                                is LocalLyricImportRoute -> {
+                                    var pendingLyric by remember(entry.path) {
+                                        mutableStateOf<String?>(null)
+                                    }
+                                    LocalLibraryDetailHost(
+                                        isTop = localTop,
+                                        onClose = {
+                                            uiViewModel.popRoute()
+                                            pendingLyric?.let { text ->
+                                                uiViewModel.popRoute()
+                                                uiViewModel.setPendingLyricImport(entry.path, text)
+                                            }
+                                        },
+                                    ) { requestClose ->
+                                        LocalLyricImportScreen(
+                                            path = entry.path,
+                                            source = entry.source,
+                                            onClose = requestClose,
+                                            onImport = { text ->
+                                                pendingLyric = text
+                                                requestClose()
+                                            },
+                                        )
+                                    }
+                                }
+
                                 // ── 外站全屏详情：链接解析进入 ──
                                 // 以前是 `SearchScreenState` 上的一对局部 var，绕过整条栈；
                                 // 现在压进 pageStack，返回键 / 层级 / 被播放页盖住全部自动生效。
@@ -1068,33 +1367,6 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                                 // 这两页以前自己 `BackHandler { popRoute() }`，等于第二条独立出栈路径，
                                 // 会在 `QobuzTokenSheet` / `KkboxAccountSheet`（在 `GlobalOverlays` 里
                                 // 排在 `pageStack` 之前注册）打开时抢返回，把整页关掉。
-                                is QobuzRoute -> LocalOverlayFrame(
-                                    onClose = { uiViewModel.popRoute() },
-                                ) { requestClose ->
-                                    QobuzDetailScreen(
-                                        qobuzViewModel = qobuzViewModel,
-                                        playerViewModel = playerViewModel,
-                                        downloadViewModel = downloadViewModel,
-                                        onBack = requestClose,
-                                        isTop = localTop,
-                                        type = entry.type,
-                                        id = entry.id,
-                                    )
-                                }
-
-                                is KkboxRoute -> LocalOverlayFrame(
-                                    onClose = { uiViewModel.popRoute() },
-                                ) { requestClose ->
-                                    KkboxDetailScreen(
-                                        kkboxViewModel = kkboxViewModel,
-                                        playerViewModel = playerViewModel,
-                                        downloadViewModel = downloadViewModel,
-                                        onBack = requestClose,
-                                        isTop = localTop,
-                                        type = entry.type,
-                                        id = entry.id,
-                                    )
-                                }
                             }
                         }
                     }
@@ -1148,6 +1420,13 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                     saveDirPath = null
                 },
                 onContact = { uiViewModel.setContactVisible(true) },
+                onPcVersion = {
+                    uriHandler.openUri("https://github.com/Zhou1019-1/AnniePlayer-LXversion-Windows")
+                },
+                lxPluginCount = lxPlugins.size,
+                onManageLxPlugins = { uiViewModel.setLxPluginManagerVisible(true) },
+                localScanExcluded = localScanExcluded.size,
+                onLocalScan = { uiViewModel.setLocalScanVisible(true) },
             )
 
             // ── 下载任务整页（声明在抽屉之后 → 盖住抽屉；抽屉不收，返回先关本页、再关抽屉） ──
@@ -1187,6 +1466,14 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                 kkboxViewModel = kkboxViewModel,
                 onClose = { uiViewModel.setKkboxAccountVisible(false) },
             )
+            LocalScanSheet(
+                visible = uiState.localScanVisible,
+                scanning = localLibraryState.scanning,
+                scannedFiles = localLibraryState.scannedFiles,
+                onClose = { uiViewModel.setLocalScanVisible(false) },
+                onRescan = { localLibraryViewModel.refresh(ctx, force = true) },
+                onApplyScope = { localLibraryViewModel.refresh(ctx, force = false) },
+            )
 
             // ── 更多设置整页（抽屉入口；打开关闭交互与下载任务页一致） ──
             MoreSettingsScreen(
@@ -1205,11 +1492,10 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                     saveLrcFile = saveLrcFile,
                     onToggleSaveLrcFile = { MoreSettings.setSaveLrcFile(it) },
                     // 输出矩阵：通路 + 该通路的开关（"能不能调音"由它们派生，不是用户选项）
-                    outputPath = outputPath,
-                    onPickOutputPath = { path ->
-                        MoreSettings.setOutputPath(path)
-                        // 选 USB 独占就趁这一刻要授权：等到播放时才申请，那一首会先落回系统通路
-                        if (path == OutputPath.usbDirect) {
+                    usbExclusive = usbExclusiveState,
+                    onToggleUsbExclusive = { on ->
+                        MoreSettings.setUsbExclusive(on)
+                        if (on) {
                             UsbAudioDirect.audioDevices(ctx).firstOrNull()?.let { device ->
                                 UsbAudioDirect.requestPermission(ctx, device) {}
                             }
@@ -1217,6 +1503,8 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                     },
                     outputToggles = outputToggles,
                     onPickOutputToggles = { MoreSettings.setOutputToggles(it) },
+                    aaudioExclusive = aaudioExclusiveState,
+                    onToggleAaudioExclusive = { MoreSettings.setAaudioExclusive(it) },
                     tuningEnabled = tuningOn,
                     tuningEngine = tuningEngine,
                     onPickTuningEngine = { MoreSettings.setTuningEngine(it) },
@@ -1276,8 +1564,6 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                             if (s.sourceRate > 0) add("源 ${khzText(s.sourceRate)}")
                         }.joinToString(" · ")
                     }.orEmpty(),
-                    lxPluginCount = lxPlugins.size,
-                    onManageLxPlugins = { uiViewModel.setLxPluginManagerVisible(true) },
                 ),
                 onClose = { uiViewModel.setMoreSettingsVisible(false) },
             )
@@ -1324,8 +1610,8 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                 // 拔掉 DAC 它也不会变，光看它会让这一页一直挂着"最高 352.8k"。
                 maxPcmRate = dsdMaxOutputRate(
                     isUsbRoute = playerState.audioStatus?.route == AudioRoute.usb,
-                    exclusiveIntent = outputPath == OutputPath.usbDirect ||
-                        playerState.audioStatus?.effectivePath == OutputPath.usbDirect,
+                    exclusiveIntent = MoreSettings.usbExclusive ||
+                        playerState.audioStatus?.effectivePath == SinkKind.usbUac,
                     level = DsdLevel.of(playerState.audioStatus?.sourceRate ?: 0),
                     probedMaxRate = playerState.audioStatus?.probedMaxRate ?: 0,
                 ),
@@ -1339,8 +1625,8 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                             wanted = MoreSettings.dsdPcmRateOf(level),
                             actual = s.dsdTargetRate,
                             isUsbRoute = s.route == AudioRoute.usb,
-                            exclusiveIntent = outputPath == OutputPath.usbDirect ||
-                                s.effectivePath == OutputPath.usbDirect,
+                            exclusiveIntent = MoreSettings.usbExclusive ||
+                                s.effectivePath == SinkKind.usbUac,
                         )?.text
                     }
                 },
@@ -1356,10 +1642,8 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                     )
                 } ?: 0,
                 currentChain = playerState.audioStatus?.let { s -> chainText(s) }.orEmpty(),
-                // DoP / Native 的硬前提：通路必须逐字节保真（mixer 会改写帧标记）。
-                // 这里用**实测**通路，不用设置里的意图 —— 降级后意图仍是"意愿"。
-                exclusiveReady = playerState.audioStatus?.effectivePath == OutputPath.usbDirect,
-                usbDacReady = playerState.audioStatus?.dsdRawAlt == true,
+                // 模式不再由本页按「此刻是不是 USB 独占」灰掉：模式是意愿，
+                // 生效与否由运行时 `resolveDsdChain` 按实测通路裁决，结论在播放页上报。
                 onPickMode = { MoreSettings.setDsdMode(it) },
                 onPickRate = { level, rate -> MoreSettings.setDsdPcmRate(level, rate) },
                 onClose = { uiViewModel.setDsdOutputVisible(false) },
@@ -1408,23 +1692,32 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
             // 例外：Qobuz Token / KKBOX 账号两个配置页声明在**本槽位之前**（见上方），
             // 于是迷你播放器浮在它们之上常驻可见（弹窗类 sheet 仍在其后声明、仍盖住它）。
             if (!hideBottomBar) {
-                AppBottomBar(
-                    selectedTab = selectedTab,
-                    onSelectTab = { appShellViewModel.selectTab(it) },
-                    isMiniPlayer = !isPrimaryPage,
-                    bottomInset = bottomInset,
-                    coverUrl = currentSong?.cover.orEmpty(),
-                    fallbackCoverUrl = colorState.currentCoverUrl,
-                    title = currentSong?.title.orEmpty(),
-                    artist = currentSong?.artist.orEmpty(),
-                    isPlaying = playerState.isPlaying,
-                    // 传流不传值：本函数（1598 行）绝不读 progress 的 value，
-                    // 否则 5 Hz 的进度会把整棵树的重组全部拖起来（见 PlaybackProgress 的 KDoc）
-                    progress = playerViewModel.progress,
-                    onOpenPlayer = { uiViewModel.setPlayerOverlayVisible(true) },
-                    modifier = Modifier
-                        .align(Alignment.BottomCenter),
-                )
+                val pageTint = uiState.pageTint
+                val barPalette = if (pageTint != null) {
+                    coverThemePalette.copyWith(primary = pageTint.primary)
+                } else {
+                    coverThemePalette
+                }
+                CompositionLocalProvider(LocalCoverThemePalette provides barPalette) {
+                    AppBottomBar(
+                        selectedTab = selectedTab,
+                        onSelectTab = { appShellViewModel.selectTab(it) },
+                        isMiniPlayer = !isPrimaryPage,
+                        bottomInset = bottomInset,
+                        coverUrl = currentSong?.cover.orEmpty(),
+                        fallbackCoverUrl = colorState.currentCoverUrl,
+                        title = currentSong?.title.orEmpty(),
+                        artist = currentSong?.artist.orEmpty(),
+                        isPlaying = playerState.isPlaying,
+                        // 传流不传值：本函数（1598 行）绝不读 progress 的 value，
+                        // 否则 5 Hz 的进度会把整棵树的重组全部拖起来（见 PlaybackProgress 的 KDoc）
+                        progress = playerViewModel.progress,
+                        onOpenPlayer = { uiViewModel.setPlayerOverlayVisible(true) },
+                        modifier = Modifier
+                            .align(Alignment.BottomCenter),
+                        glassCoverUrl = pageTint?.coverUrl.orEmpty(),
+                    )
+                }
             }
 
             // ── 全屏播放页浮层（RN zIndex 300） ──
@@ -1479,6 +1772,126 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                     },
                 )
             }
+
+            // ── 多选操作抽屉（搜索结果 / 歌手全部单曲共用） ──
+            // 页面只把「已选歌曲 + 属于哪一边 + 是谁打开的」交出来，两个动作都在这里执行；
+            // 收起时按 origin 清空对应页面的选中（那两个选中状态分属不同的持有者）。
+            val multiSelect = uiState.multiSelectSheet
+            val clearMultiSelection: () -> Unit = {
+                when (multiSelect?.origin) {
+                    MultiSelectOrigin.Search -> selectionViewModel.clearAll()
+                    MultiSelectOrigin.ArtistSongs -> {
+                        val platform = multiSelect.artistPlatform
+                        val artistId = multiSelect.artistId
+                        if (platform != null && artistId != null) {
+                            SingerDetailCache.of(platform, artistId).clearSelection()
+                        }
+                    }
+                    // 详情页的选中由页面自己持有：动作做完只关抽屉，退不退多选由页面决定
+                    MultiSelectOrigin.PlaylistDetail, MultiSelectOrigin.AlbumDetail,
+                    MultiSelectOrigin.LocalPage,
+                    -> Unit
+                    null -> Unit
+                }
+                uiViewModel.closeMultiSelectSheet()
+            }
+            MultiSelectSheet(
+                visible = multiSelect != null,
+                count = multiSelect?.songs?.size ?: 0,
+                // 与 ⋮ 面板同一套分边规则，但「已加入」判据不同：多选是「**全部**都已在里面」
+                // 才不可点（只含一部分时照常可点，append 会跳过重复的那几首）
+                playlistOptions = remember(favoriteSnapshot, multiSelect) {
+                    val songs = multiSelect?.songs.orEmpty()
+                    val scope = multiSelect?.scope
+                    if (songs.isEmpty() || scope == null) {
+                        emptyList()
+                    } else {
+                        val keys = songs.map {
+                            com.annieplayer.annie_music.kt.data.favorites.FavoriteKeys.song(it)
+                        }.toSet()
+                        favoriteSnapshot.userPlaylists
+                            .filter { it.scope == scope }
+                            .map { pl ->
+                                val contained = pl.songs.count { song ->
+                                    com.annieplayer.annie_music.kt.data.favorites.FavoriteKeys
+                                        .song(song) in keys
+                                }
+                                com.annieplayer.annie_music.kt.widgets.SongPlaylistOption(
+                                    playlistId = pl.id,
+                                    name = pl.name,
+                                    trackCount = pl.songs.size,
+                                    alreadyContains = contained == keys.size,
+                                )
+                            }
+                    }
+                },
+                onClose = { uiViewModel.closeMultiSelectSheet() },
+                // 下载：抽屉**不关**（音质面板盖在它上面）。取消就退回抽屉；
+                // 确认后 `onFinished` 才关抽屉 + 清选中 —— 这样 origin 一直拿得到。
+                onDownload = { dl.openBatchPicker(multiSelect?.songs.orEmpty()) },
+                onAddToPlaylist = { playlistId ->
+                    val songs = multiSelect?.songs.orEmpty()
+                    if (songs.isNotEmpty()) {
+                        favoriteViewModel.addSongsToUserPlaylist(playlistId, songs)
+                    }
+                    clearMultiSelection()
+                },
+                local = multiSelect?.songs?.all {
+                    it.platform == com.annieplayer.annie_music.kt.data.model.MusicPlatform.local
+                } == true,
+                onDelete = {
+                    val songs = multiSelect?.songs.orEmpty()
+                    uiViewModel.closeMultiSelectSheet()
+                    if (songs.isNotEmpty()) uiViewModel.setLocalDeleteBatch(songs)
+                },
+            )
+
+            // ── 「添加到」面板（选歌单） ──
+            // 多选态的「加入到歌单」直接弹它。**必须由宿主在底栏之上渲染**：
+            // 页面内联会画在页面内部，被迷你播放条 / 底栏压住（穿模）。
+            // 与搜索多选、⋮ 面板的第二级是同一颗面板、同一个层级。
+            val playlistPickerRequest = uiState.playlistPicker
+            if (playlistPickerRequest != null) {
+                BackHandler { uiViewModel.closePlaylistPicker() }
+            }
+            PlaylistPickerSheet(
+                visible = playlistPickerRequest != null,
+                options = remember(favoriteSnapshot, playlistPickerRequest) {
+                    val songs = playlistPickerRequest?.songs.orEmpty()
+                    if (songs.isEmpty()) {
+                        emptyList()
+                    } else {
+                        val keys = songs.map {
+                            com.annieplayer.annie_music.kt.data.favorites.FavoriteKeys.song(it)
+                        }.toSet()
+                        favoriteSnapshot.userPlaylists
+                            .filter { it.scope == playlistPickerRequest?.scope }
+                            .map { pl ->
+                                val contained = pl.songs.count { song ->
+                                    com.annieplayer.annie_music.kt.data.favorites.FavoriteKeys
+                                        .song(song) in keys
+                                }
+                                com.annieplayer.annie_music.kt.widgets.SongPlaylistOption(
+                                    playlistId = pl.id,
+                                    name = pl.name,
+                                    trackCount = pl.songs.size,
+                                    alreadyContains = contained == keys.size,
+                                )
+                            }
+                    }
+                },
+                favoriteSelected = false,
+                favoriteCount = 0,
+                onClose = { uiViewModel.closePlaylistPicker() },
+                onSelect = { playlistId ->
+                    val songs = playlistPickerRequest?.songs.orEmpty()
+                    if (songs.isNotEmpty()) {
+                        favoriteViewModel.addSongsToUserPlaylist(playlistId, songs)
+                    }
+                    uiViewModel.closePlaylistPicker()
+                },
+                onAddToFavorites = null,
+            )
 
             // ── 歌曲操作面板（⋮，内部含多歌手选择） ──
             SongActionsSheet(
@@ -1574,6 +1987,16 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                 // 本地歌曲「删除」：⋮ 面板已经自己收起了，这里只把目标交给 UiState，
                 // 由紧跟其后的 LocalDeleteModal 弹确认框（面板内部弹会被一起收掉）。
                 onDelete = { song -> uiViewModel.setLocalDeleteTarget(song) },
+                // 本地歌曲「编辑元数据」：详情面板已自己收起，这里压入编辑页（L1 页面栈）。
+                // 只认本地文件 —— 云端歌的标签不在本机上，编辑页取不到 meta。
+                onEditMetadata = { song ->
+                    val p = song.id.removePrefix("local:")
+                    if (p.isNotEmpty()) {
+                        uiViewModel.setSongActionsVisible(false)
+                        uiViewModel.setPlayerOverlayVisible(false)
+                        uiViewModel.pushRoute(LocalTrackEditRoute(p))
+                    }
+                },
                 onOpenAlbum = { song ->
                     if (song.platform == com.annieplayer.annie_music.kt.data.model.MusicPlatform.local) {                        // 本地专辑的键是「专辑 · 专辑艺术家」，与 albumGroupKey 同源
                         // 同样先收起播放页，再压栈
@@ -1667,6 +2090,30 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                 )
             }
 
+            // ── 本地歌曲批量删除确认（多选抽屉 / 详情页「删除」） ──
+            val deleteBatch = uiState.localDeleteBatch
+            if (deleteBatch != null && deleteBatch.isNotEmpty()) {
+                val batchPaths = remember(deleteBatch) {
+                    deleteBatch.map { it.id.removePrefix("local:") }.filter { it.isNotEmpty() }
+                }
+                LocalDeleteModal(
+                    visible = true,
+                    songTitle = "已选 ${deleteBatch.size} 首",
+                    songSubtitle = deleteBatch.take(3).joinToString(" / ") { it.title },
+                    filePath = "${batchPaths.size} 个文件",
+                    fileSizeText = "",
+                    fileExists = true,
+                    onConfirm = { withFile ->
+                        playerViewModel.removeSongsFromQueue(deleteBatch.map { it.id })
+                        localLibraryViewModel.deleteTracks(batchPaths, withFile)
+                        uiViewModel.setLocalDeleteBatch(null)
+                    },
+                    onClose = { uiViewModel.setLocalDeleteBatch(null) },
+                    title = "删除 ${deleteBatch.size} 首歌",
+                    subtitle = "将从本地曲库移除这 ${deleteBatch.size} 首歌",
+                )
+            }
+
             // ── 下载音质选择（单曲） ──
             QualityPickerSheet(
                 visible = uiState.pickerVisible,
@@ -1683,18 +2130,20 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
             )
 
             // ── 下载音质选择（批量） ──
+            // 候选歌曲来自 `dl.batchPickerSongs`（由「多选操作」抽屉交进来），
+            // 不再从某个多选状态里读 —— 那两个选中状态分属不同持有者。
             QualityPickerSheet(
                         visible = dl.batchPickerVisible,
-                        qualities = batchDownloadQualities(selection.selectedSongs),
+                        qualities = batchDownloadQualities(dl.batchPickerSongs),
                         sizeOf = { q ->
-                            if (selection.selectedSongs.size == 1) {
-                                selection.selectedSongs.first().qualitySizes[q]
+                            if (dl.batchPickerSongs.size == 1) {
+                                dl.batchPickerSongs.first().qualitySizes[q]
                             } else {
                                 null
                             }
                         },
                         labelOf = { q ->
-                            val platforms = selection.selectedSongs.map { it.platform }.distinct()
+                            val platforms = dl.batchPickerSongs.map { it.platform }.distinct()
                             if (platforms.size == 1) {
                                 playQualityLabelOf(platforms.first(), q)
                             } else {
@@ -1702,7 +2151,11 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                             }
                         },
                 onSelect = { quality ->
-                    dl.downloadBatch(selection.selectedSongs, quality) { selectionViewModel.clearAll() }
+                    // 先把这批歌交给编排器，再立刻收抽屉 + 清选中：`downloadBatch` 是排队跑的，
+                    // 等它跑完（可能几分钟）再收，用户会看到一个选中的旧抽屉留在屏上。
+                    val songs = dl.batchPickerSongs
+                    clearMultiSelection()
+                    dl.downloadBatch(songs, quality)
                 },
                 onCancel = { dl.closeBatchPicker() },
             )
@@ -1873,7 +2326,7 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                     properties = DialogProperties(dismissOnClickOutside = false),
                     containerColor = AppColors.surface,
                     title = {
-                        Text(text = "退出安妮音乐盒？", style = AnnieTypography.dialogTitle)
+                        Text(text = "退出安妮播放器？", style = AnnieTypography.dialogTitle)
                     },
                     text = {
                         Text(
@@ -1898,6 +2351,12 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                     },
                 )
             }
+
+            // ── 工具箱：遥控 PC 端安妮播放器（整页浮层，最后声明 = 返回最先收到） ──
+            LanRemoteSheet(
+                visible = uiState.lanRemoteVisible,
+                onClose = { uiViewModel.setLanRemoteVisible(false) },
+            )
         }
         }   // CompositionLocalProvider（氛围主题色）闭合
     }

@@ -17,22 +17,14 @@ import com.annieplayer.annie_music.kt.data.sources.common.firstTruthy
 suspend fun fetchQQArtistBio(singerMid: String): String {
     return try {
         val payload: Map<String, Any?> = mapOf(
-            "comm" to mapOf("ct" to 24, "cv" to 0),
+            "comm" to qqComm(),
             "singer" to mapOf(
                 "module" to "music.web_singer_info_svr",
                 "method" to "get_singer_detail_info",
                 "param" to mapOf("sort" to 5, "singermid" to singerMid, "begin" to 0, "num" to 1),
             ),
         )
-        val data = httpPostJson(
-            qqMusicuUrl,
-            body = payload,
-            headers = mapOf(
-                "Content-Type" to "application/json",
-                "User-Agent" to qqOr(qqHeaders["User-Agent"], ""),
-                "Referer" to "https://y.qq.com/",
-            ),
-        )
+        val data = qqMusicuPost(payload)
         val singer = data["singer"]
         val d = if (singer is Map<*, *>) singer["data"] else null
         if (d is Map<*, *>) (d["singer_brief"] ?: "").toString().trim() else ""
@@ -67,7 +59,7 @@ suspend fun getQQArtistSongsRange(
 ): ArtistSongsPage {
     try {
         val payload: Map<String, Any?> = mapOf(
-            "comm" to mapOf("ct" to 24, "cv" to 0),
+            "comm" to qqComm(),
             "songList" to mapOf(
                 "module" to "musichall.song_list_server",
                 "method" to "GetSingerSongList",
@@ -79,15 +71,7 @@ suspend fun getQQArtistSongsRange(
                 ),
             ),
         )
-        val data = httpPostJson(
-            qqMusicuUrl,
-            body = payload,
-            headers = mapOf(
-                "Content-Type" to "application/json",
-                "User-Agent" to qqOr(qqHeaders["User-Agent"], ""),
-                "Referer" to "https://y.qq.com/",
-            ),
-        )
+        val data = qqMusicuPost(payload)
         val node = data["songList"]
         val d = if (node is Map<*, *>) node["data"] else null
         val listRaw = if (d is Map<*, *>) d["songList"] else null
@@ -159,9 +143,9 @@ private suspend fun _fetchQQArtistAlbumsViaMusicu(singerMid: String): List<Album
                         "order" to 1,
                     ),
                 ),
-                "comm" to mapOf("guid" to qqMusicuGuid, "ct" to 19, "cv" to 1914),
+                "comm" to qqComm(),
             )
-            val data = httpPostJson(qqMusicuUrl, qqHeaders, payload)
+            val data = qqMusicuPost(payload)
             val req0 = data["req_0"]
             val d = if (req0 is Map<*, *>) req0["data"] else null
             val list = if (d is Map<*, *>) firstTruthy(listOf(d["albumList"], d["list"])) else null

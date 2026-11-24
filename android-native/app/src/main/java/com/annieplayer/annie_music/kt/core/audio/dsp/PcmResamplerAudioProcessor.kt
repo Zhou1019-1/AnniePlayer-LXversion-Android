@@ -182,7 +182,11 @@ class PcmResamplerAudioProcessor : BaseAudioProcessor() {
             16 -> C.ENCODING_PCM_16BIT
             24 -> C.ENCODING_PCM_24BIT
             32 -> C.ENCODING_PCM_FLOAT
-            else -> encoding
+            else -> if (_targetRate > 0 && _targetRate != inputAudioFormat.sampleRate) {
+                C.ENCODING_PCM_FLOAT
+            } else {
+                encoding
+            }
         }
         val doResample = _targetRate > 0 && _targetRate != inputAudioFormat.sampleRate
         val doDepth = targetEncoding != encoding

@@ -11,25 +11,48 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawWithContent
+import androidx.compose.ui.graphics.BlendMode
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.CompositingStrategy
+import androidx.compose.ui.graphics.drawscope.clipRect
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.platform.LocalConfiguration
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.annieplayer.annie_music.kt.R
+import com.annieplayer.annie_music.kt.ui.theme.AppIconSize
 import com.annieplayer.annie_music.kt.core.compose.activityViewModel
 import com.annieplayer.annie_music.kt.core.state.FavoriteViewModel
 import com.annieplayer.annie_music.kt.data.local.LocalLibraryStore
@@ -38,16 +61,29 @@ import com.annieplayer.annie_music.kt.data.local.albumGroupKey
 import com.annieplayer.annie_music.kt.data.local.localAlbumDateOf
 import com.annieplayer.annie_music.kt.data.local.artistGroupKeys
 import com.annieplayer.annie_music.kt.data.local.localAlbumType
+import com.annieplayer.annie_music.kt.data.favorites.FavoriteKeys
 import com.annieplayer.annie_music.kt.data.model.MusicPlatform
+import com.annieplayer.annie_music.kt.data.model.albumKindByTrackCount
+import com.annieplayer.annie_music.kt.data.sources.apple.findAppleArtistMotionCover
+import com.annieplayer.annie_music.kt.widgets.LatestReleaseCard
+import com.annieplayer.annie_music.kt.widgets.latestReleaseDateText
+import com.annieplayer.annie_music.kt.widgets.latestReleaseTitle
+import com.annieplayer.annie_music.kt.widgets.latestReleaseTrackCountText
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppFontSize
 import com.annieplayer.annie_music.kt.ui.theme.AppSize
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 import com.annieplayer.annie_music.kt.ui.theme.ColorPalette
 import com.annieplayer.annie_music.kt.widgets.CoverPaletteBackdrop
+import com.annieplayer.annie_music.kt.widgets.PageTintEffect
+import com.annieplayer.annie_music.kt.widgets.blockTouches
+import com.annieplayer.annie_music.kt.widgets.heroCoverFade
 import com.annieplayer.annie_music.kt.widgets.rememberCoverPalette
 import com.annieplayer.annie_music.kt.widgets.DetailHeartButton
 import com.annieplayer.annie_music.kt.widgets.DetailPlayAllPill
+import com.annieplayer.annie_music.kt.widgets.DetailRoundIconButton
+import com.annieplayer.annie_music.kt.widgets.MotionHeroScaffold
+import com.annieplayer.annie_music.kt.widgets.PlaylistMotionCover
 import com.annieplayer.annie_music.kt.widgets.shortScrollbar
 import com.annieplayer.annie_music.kt.widgets.SongRowPager
 
@@ -120,16 +156,27 @@ fun LocalArtistDetailScreen(
             }
     }
     val heroCover = remember(ordered) {
-        ordered.firstNotNullOfOrNull { t -> t.coverPath ?: LocalLibraryStore.existingCover(t.path) }
+        ordered.firstNotNullOfOrNull { t -> t.coverPath ?: LocalLibraryStore.existingCover(t) }
     }
     // 打开歌手页时补抽封面（限 80 首，避免几千首的歌手一次排满队列）
     LaunchedEffect(ordered) { ordered.take(80).forEach { onRequestCover(it.path) } }
     // overview 只预览一小部分，「全部」按钮只在装不下时才出现
     val overviewSongs = remember(ordered) { ordered.take(LocalArtistOverviewSongs) }
     val overviewAlbums = remember(albums) { albums.take(LocalArtistOverviewAlbums) }
+    val latestLocal = remember(albums) { albums.firstOrNull() }
 
     // 收藏：本地歌手的键就是展示用的名字（与 `artistGroupKeys` 一致），paths 供改 tag 后自愈
     val heroCoverUrl = heroCover?.let { "file://$it" }
+    var appleStill by remember(artistName) { mutableStateOf("") }
+    var motionCover by remember(artistName) { mutableStateOf("") }
+    LaunchedEffect(artistName) {
+        if (appleStill.isNotEmpty() || motionCover.isNotEmpty()) return@LaunchedEffect
+        val found = runCatching { findAppleArtistMotionCover(artistName) }.getOrNull()
+            ?: return@LaunchedEffect
+        if (appleStill.isEmpty()) appleStill = found.stillCover
+        if (motionCover.isEmpty()) motionCover = found.motionCover
+    }
+    val heroImageUrl = appleStill.ifEmpty { heroCoverUrl.orEmpty() }
     val favoriteViewModel: FavoriteViewModel = activityViewModel()
     val favoriteSnapshot by favoriteViewModel.snapshot.collectAsState()
     val favorited = remember(favoriteSnapshot, artistName) {
@@ -140,82 +187,90 @@ fun LocalArtistDetailScreen(
 
     Box(modifier = modifier.fillMaxSize()) {
         // ── 背景：跟随**本页这位歌手的封面**取色（LunaBeat 规则），不跟正在播放的歌曲。
-        // 本地曲库没有歌手头像资源，所以「歌手封面」= 该歌手首曲封面（就是上面 Hero 头像
-        // 用的那张 heroCover），侧滑 / 点进点出都稳定，不会因为切歌而变化。
+        // 歌手图优先用 Apple 的（有动态用动态的首帧静态图，没有就用它的静态图），
+        // 两者都没有才退回本地首曲封面；侧滑 / 点进点出都稳定，不会因为切歌而变化。
+        val heroPalette = rememberCoverPalette(heroImageUrl)
+        PageTintEffect(
+            uiViewModel = activityViewModel(),
+            palette = heroPalette,
+            coverUrl = heroImageUrl,
+        )
         CoverPaletteBackdrop(
-            coverUrl = heroCover,
-            palette = rememberCoverPalette(heroCover),
+            coverUrl = heroImageUrl,
+            palette = heroPalette,
             modifier = Modifier.fillMaxSize(),
         )
-        Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
-            LocalDetailTopBar(
-                title = "歌手详情",
-                count = "${ordered.size} 首",
-                onClose = onClose,
-            )
-
+        Box(modifier = Modifier.fillMaxSize().clipToBounds()) {
             val listState = rememberLazyListState()
-            LazyColumn(
-                state = listState,
-                modifier = Modifier.fillMaxSize().shortScrollbar(listState),
-                contentPadding = PaddingValues(bottom = AppSpacing.listBottomInset),
+            var barBottomPx by remember { mutableStateOf(0) }
+            MotionHeroScaffold(
+                aspectRatio = 0.92f,
+                barBottomPx = barBottomPx,
+                listState = listState,
+                bottomInset = AppSpacing.listBottomInset,
+                video = {
+                    LocalArtistHeroVideo(
+                        heroImage = heroImageUrl.ifEmpty { null },
+                        artistName = artistName,
+                        motionCover = motionCover,
+                    )
+                },
+                foreground = {
+                    LocalArtistHero(
+                        artistName = artistName,
+                        albumCount = albums.size,
+                        songCount = ordered.size,
+                        favorited = favorited,
+                        onToggleFavorite = {
+                            favoriteViewModel.toggleArtist(
+                                platform = MusicPlatform.local,
+                                artistId = null,
+                                name = artistName,
+                                picture = heroImageUrl,
+                                paths = ordered.map { it.path },
+                                key = artistName,
+                            )
+                        },
+                        enabled = ordered.isNotEmpty(),
+                        onPlayAll = { if (ordered.isNotEmpty()) onPlayAt(ordered, 0) },
+                        onShuffleAll = {
+                            if (ordered.isNotEmpty()) onPlayAt(ordered, ordered.indices.random())
+                        },
+                    )
+                },
             ) {
-                // ── Hero：正圆头像 55% + 名字 26sp + 统计 + 播放胶囊 ──
-                item(key = "hero") {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = AppSpacing.sp24, vertical = AppSpacing.sp20),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                    ) {
-                        LocalArtistAvatar(
-                            name = artistName,
-                            coverPath = heroCover,
-                            size = 200.dp,
-                            letterSize = AppFontSize.size34,
-                            modifier = Modifier.fillMaxWidth(0.55f).aspectRatio(1f),
+                if (latestLocal != null) {
+                    item(key = "latest-release") {
+                        val (albumKey, tracks) = latestLocal
+                        val albumName = albumKey.substringBefore(" · ")
+                        val date = localAlbumDateOf(tracks).orEmpty()
+                        val coverPath = tracks.firstNotNullOfOrNull { it.coverPath }
+                        val coverUrl = coverPath?.let { "file://$it" }
+                        LatestReleaseCard(
+                            cover = coverUrl,
+                            dateText = latestReleaseDateText(date),
+                            title = latestReleaseTitle(
+                                albumName,
+                                albumKindByTrackCount(tracks.size).orEmpty(),
+                            ),
+                            countText = latestReleaseTrackCountText(tracks.size),
+                            onClick = { onOpenAlbum(albumKey) },
+                            onAdd = {
+                                favoriteViewModel.toggleAlbum(
+                                    platform = MusicPlatform.local,
+                                    albumId = null,
+                                    name = albumName,
+                                    artist = artistName,
+                                    cover = coverUrl.orEmpty(),
+                                    paths = tracks.map { it.path },
+                                    key = FavoriteKeys.localAlbum(albumName, artistName),
+                                    trackCount = tracks.size,
+                                    releaseDate = date,
+                                )
+                            },
                         )
-                        Spacer(modifier = Modifier.height(AppSpacing.sp16))
-                        Text(
-                            text = artistName,
-                            color = AppColors.textPrimary,
-                            fontSize = AppFontSize.size26,
-                            fontWeight = FontWeight.Bold,
-                            textAlign = TextAlign.Center,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Spacer(modifier = Modifier.height(AppSpacing.sp4))
-                        Text(
-                            text = "${albums.size} 张专辑 · ${ordered.size} 首",
-                            color = AppColors.whiteA50,
-                            fontSize = AppFontSize.size13,
-                            textAlign = TextAlign.Center,
-                        )
-                        Spacer(modifier = Modifier.height(AppSpacing.sp16))
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            DetailHeartButton(
-                                selected = favorited,
-                                onClick = {
-                                    favoriteViewModel.toggleArtist(
-                                        platform = MusicPlatform.local,
-                                        artistId = null,
-                                        name = artistName,
-                                        picture = heroCoverUrl.orEmpty(),
-                                        paths = ordered.map { it.path },
-                                        key = artistName,
-                                    )
-                                },
-                            )
-                            Spacer(modifier = Modifier.width(AppSpacing.sp16))
-                            DetailPlayAllPill(
-                                onClick = { if (ordered.isNotEmpty()) onPlayAt(ordered, 0) },
-                                enabled = ordered.isNotEmpty(),
-                            )
-                        }
                     }
                 }
-
                 // ── 歌曲（预览一段；「全部」恒定出现，一首歌也给）──
                 item(key = "songs-header") {
                     LocalSectionHeader(
@@ -285,6 +340,142 @@ fun LocalArtistDetailScreen(
                     }
                 }
                 item(key = "bottom-space") { Spacer(modifier = Modifier.height(AppSpacing.sp24)) }
+            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .blockTouches()
+                    .onSizeChanged { barBottomPx = it.height }
+                    .statusBarsPadding(),
+            ) {
+                LocalDetailTopBar(
+                    title = "",
+                    onClose = onClose,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun LocalArtistHeroVideo(
+    heroImage: String?,
+    artistName: String,
+    motionCover: String,
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .graphicsLayer { compositingStrategy = CompositingStrategy.Offscreen }
+            .drawWithContent {
+                drawContent()
+                drawRect(
+                    brush = Brush.verticalGradient(
+                        0f to Color.Black,
+                        0.62f to Color.Black,
+                        0.86f to Color.Black.copy(alpha = 0.55f),
+                        1f to Color.Transparent,
+                    ),
+                    blendMode = BlendMode.DstIn,
+                )
+            },
+        contentAlignment = Alignment.Center,
+    ) {
+        if (motionCover.isNotEmpty()) {
+            PlaylistMotionCover(
+                videoUrl = motionCover,
+                previewUrl = heroImage.orEmpty(),
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else if (heroImage.isNullOrEmpty()) {
+            LocalArtistAvatar(
+                name = artistName,
+                coverPath = null,
+                size = 180.dp,
+                letterSize = AppFontSize.size34,
+                modifier = Modifier.size(180.dp),
+            )
+        } else {
+            coil.compose.AsyncImage(
+                model = heroImage,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
+}
+
+@Composable
+private fun LocalArtistHero(
+    artistName: String,
+    albumCount: Int,
+    songCount: Int,
+    favorited: Boolean,
+    onToggleFavorite: () -> Unit,
+    enabled: Boolean,
+    onPlayAll: () -> Unit,
+    onShuffleAll: (() -> Unit)? = null,
+    modifier: Modifier = Modifier,
+) {
+    Column(modifier = modifier.fillMaxWidth()) {
+        Box(modifier = Modifier.fillMaxWidth().aspectRatio(0.92f)) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.verticalGradient(
+                            0.42f to Color.Transparent,
+                            0.70f to Color.Black.copy(alpha = 0.34f),
+                            0.90f to Color.Black.copy(alpha = 0.28f),
+                            1f to Color.Transparent,
+                        ),
+                    ),
+            )
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomCenter)
+                    .padding(horizontal = AppSpacing.sp24, vertical = AppSpacing.sp16),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    text = artistName,
+                    color = AppColors.textPrimary,
+                    fontSize = AppFontSize.size26,
+                    fontWeight = FontWeight.Bold,
+                    textAlign = TextAlign.Center,
+                    maxLines = 2,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                Spacer(modifier = Modifier.height(AppSpacing.sp4))
+                Text(
+                    text = "$albumCount 张专辑 · $songCount 首",
+                    color = AppColors.whiteA50,
+                    fontSize = AppFontSize.size13,
+                    textAlign = TextAlign.Center,
+                )
+            }
+        }
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = AppSpacing.sp16),
+            horizontalArrangement = Arrangement.Center,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            DetailHeartButton(selected = favorited, onClick = onToggleFavorite)
+            Spacer(modifier = Modifier.width(AppSpacing.sp16))
+            DetailPlayAllPill(onClick = onPlayAll, enabled = enabled)
+            if (onShuffleAll != null) {
+                Spacer(modifier = Modifier.width(AppSpacing.sp16))
+                DetailRoundIconButton(onClick = onShuffleAll, enabled = enabled) { tint ->
+                    Icon(
+                        painter = painterResource(R.drawable.ic_action_shuffle),
+                        contentDescription = "随机播放",
+                        tint = tint,
+                        modifier = Modifier.size(AppIconSize.icon22),
+                    )
+                }
             }
         }
     }

@@ -74,8 +74,6 @@ private val CoverBoxSize = 132.dp
  * 选完立刻读成压缩后的 JPEG（`readPlaylistCoverBytes`，长边 ≤ 512），创建时连同歌单一起
  * 写进 SQLite 的 `cover_blob`。**不记住 `content://`**：那个读权限出了本次授权就失效，
  * 重启后封面会变空白。
- *
- * 不选就用占位图；「自动取第一首歌的封面」还没有（导入歌单之后才谈得上）。
  */
 @Composable
 internal fun NewPlaylistDialog(

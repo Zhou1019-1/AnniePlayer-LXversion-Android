@@ -26,7 +26,6 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
@@ -42,10 +41,12 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
+import com.annieplayer.annie_music.kt.R
 import com.annieplayer.annie_music.kt.data.source.LxPlugin
 import com.annieplayer.annie_music.kt.data.source.LxSourceMapper
 import com.annieplayer.annie_music.kt.ui.theme.AnnieTypography
@@ -141,9 +142,9 @@ fun LxPluginManagerSheet(
                         .padding(AppSpacing.sp4),
                 ) {
                     Icon(
-                        imageVector = Icons.Default.Add,
-                        contentDescription = null,
-                        tint = AppColors.primary,
+                        painter = painterResource(R.drawable.ic_action_add),
+                        contentDescription = "导入插件",
+                        tint = AppColors.white,
                         modifier = Modifier.size(AppIconSize.icon24),
                     )
                 }

@@ -94,10 +94,11 @@ private suspend fun fetchKugouAlbumSongsSigned(albumId: String): List<AlbumSong>
 
 suspend fun getKugouAlbumSongs(albumId: String): AlbumSongsPage {
     val songs = fetchKugouAlbumSongsSigned(albumId) ?: return AlbumSongsPage(emptyList())
-    return AlbumSongsPage(songs, fetchKugouAlbumInfo(albumId).pub)
+    val info = fetchKugouAlbumInfo(albumId)
+    return AlbumSongsPage(songs, info.pub, info.company)
 }
 
-/** 酷狗专辑信息：发行日期 / 专辑歌手（`album/song` 都不带，需另取 `album/info`） */
+/** 酷狗专辑信息：发行日期 / 专辑歌手 / 唱片公司（`album/song` 都不带，需另取 `album/info`） */
 internal suspend fun fetchKugouAlbumInfo(albumId: String): KugouAlbumInfo {
     return try {
         val info = httpGetJson(
@@ -109,6 +110,7 @@ internal suspend fun fetchKugouAlbumInfo(albumId: String): KugouAlbumInfo {
             KugouAlbumInfo(
                 pub = (d["publishtime"] ?: "").toString().trim().take(10),
                 albumArtist = decodeHtmlEntities((d["singername"] ?: "").toString()),
+                company = decodeHtmlEntities((d["company"] ?: "").toString()).trim(),
             )
         } else {
             KugouAlbumInfo("", "")

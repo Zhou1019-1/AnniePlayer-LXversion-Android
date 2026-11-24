@@ -137,12 +137,14 @@ private fun _albumItemsToAlbums(
     val id = kkboxStr(item["encrypted_album_id"]).ifEmpty { kkboxStr(item["album_id"]) }
     if (id.isEmpty()) return@mapNotNull null
     val cover = kkboxPhotoCover(item["album_photo_info"])
+    val trackCount = listOf("track_count", "song_count", "album_track_count")
+        .firstNotNullOfOrNull { key -> kkboxInt(item[key]).takeIf { it > 0 } }
     Album(
         albumid = id,
         name = kkboxStr(item["album_name"]).ifEmpty { "未知专辑" },
         artist = artistName.ifEmpty { kkboxStr(item["artist_name"]) },
         platform = MusicPlatform.kkbox,
-        musiccnt = "0",
+        musiccnt = (trackCount ?: 0).toString(),
         pub = kkboxStr(item["album_date"]),
         pic = cover,
         img = cover,

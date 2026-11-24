@@ -25,7 +25,6 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Refresh
@@ -58,6 +57,8 @@ import com.annieplayer.annie_music.kt.data.model.KkboxAccount
 import com.annieplayer.annie_music.kt.data.model.KkboxSession
 import com.annieplayer.annie_music.kt.data.sources.kkbox.login
 import com.annieplayer.annie_music.kt.ui.theme.AppBorder
+import androidx.compose.ui.res.painterResource
+import com.annieplayer.annie_music.kt.R
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppDuration
 import com.annieplayer.annie_music.kt.ui.theme.AppEasing
@@ -380,9 +381,9 @@ private fun KkboxAccountSheetHeader(
                 .padding(AppSpacing.sp4),
         ) {
             Icon(
-                imageVector = Icons.Default.Add,
+                painter = painterResource(R.drawable.ic_action_add),
                 contentDescription = "添加 KKBOX 账号",
-                tint = AppColors.primary,
+                tint = AppColors.white,
                 modifier = Modifier.size(AppIconSize.icon24),
             )
         }

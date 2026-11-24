@@ -5,7 +5,8 @@ import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -15,31 +16,52 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
+import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.layout.ContentScale
-import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.annieplayer.annie_music.kt.R
+import com.annieplayer.annie_music.kt.core.state.AppleRankRoomRoute
+import com.annieplayer.annie_music.kt.core.state.HomeSection
 import com.annieplayer.annie_music.kt.core.state.HomeShelfAllData
 import com.annieplayer.annie_music.kt.core.state.HomeShelfRoute
+import com.annieplayer.annie_music.kt.core.state.MultiSelectOrigin
+import com.annieplayer.annie_music.kt.core.state.MultiSelectSheetState
+import com.annieplayer.annie_music.kt.core.state.NewTabRoomRoute
+import com.annieplayer.annie_music.kt.core.state.PlaylistDetailPreload
+import com.annieplayer.annie_music.kt.core.state.QobuzSeeAllData
+import com.annieplayer.annie_music.kt.core.state.QobuzSeeAllRoute
+import com.annieplayer.annie_music.kt.core.state.QobuzTagRoute
+import com.annieplayer.annie_music.kt.core.state.RankDetailRoute
 import com.annieplayer.annie_music.kt.core.state.SearchSelectionViewModel
 import com.annieplayer.annie_music.kt.core.state.SelectionState
 import com.annieplayer.annie_music.kt.core.state.UiState
 import com.annieplayer.annie_music.kt.core.state.UiViewModel
 import com.annieplayer.annie_music.kt.core.state.toRoute
+import com.annieplayer.annie_music.kt.data.favorites.PlaylistScope
 import com.annieplayer.annie_music.kt.data.model.DownloadTask
+import com.annieplayer.annie_music.kt.data.model.MusicPlatform
 import com.annieplayer.annie_music.kt.data.model.Song
+import com.annieplayer.annie_music.kt.data.network.cacheService
+import com.annieplayer.annie_music.kt.data.sources.rank.RankBoard
+import com.annieplayer.annie_music.kt.data.sources.rank.RankPageSize
+import com.annieplayer.annie_music.kt.data.sources.rank.fetchRankDetail
 import com.annieplayer.annie_music.kt.features.downloads.DownloadOrchestrator
 import com.annieplayer.annie_music.kt.features.search.HomeSourceSwitchButton
 import com.annieplayer.annie_music.kt.features.search.SearchScreenState
+import kotlinx.coroutines.launch
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppFontSize
 import com.annieplayer.annie_music.kt.ui.theme.AppFontWeight
@@ -47,11 +69,10 @@ import com.annieplayer.annie_music.kt.ui.theme.AppLetterSpacing
 import com.annieplayer.annie_music.kt.ui.theme.AppRadius
 import com.annieplayer.annie_music.kt.ui.theme.AppSize
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
-import com.annieplayer.annie_music.kt.ui.theme.LocalAmbientCoverUrl
-import com.annieplayer.annie_music.kt.ui.theme.LocalCoverThemePalette
 import com.annieplayer.annie_music.kt.widgets.AppTopBar
-import com.annieplayer.annie_music.kt.widgets.CoverPaletteBackdrop
+import com.annieplayer.annie_music.kt.widgets.AppleCountryButton
 import com.annieplayer.annie_music.kt.widgets.ModeDropdownMode
+import com.annieplayer.annie_music.kt.widgets.MultiSelectHeaderActions
 import com.annieplayer.annie_music.kt.widgets.SearchBarMagnifierGlyph
 import com.annieplayer.annie_music.kt.widgets.clickableRipple
 import kotlinx.coroutines.launch
@@ -64,7 +85,7 @@ import kotlinx.coroutines.launch
 //
 // | 形态 | 顶栏 | 第二行 | 内容 |
 // |---|---|---|---|
-// | **浏览态** | 菜单 · 安妮音乐盒 · 头像 | 右端一个孤立的 🔍 | 主页内容（`HomeFeed`） |
+// | **浏览态** | 菜单 · 主页 | 右端一个孤立的 🔍 | 主页内容（`HomeFeed`） |
 // | **搜索态** | 菜单 · 搜索 | 模式按钮 + 搜索框 | 搜索结果（`HomeSearchPanel`） |
 //
 // 搜索**不是页面**：它不进 `UiState.pageStack`，而是 `UiState.homeSearchExpanded` 一个开关。
@@ -79,8 +100,8 @@ import kotlinx.coroutines.launch
 //
 // ## 形态切换全部是淡入淡出
 //
-// 标题（`Crossfade`）、头像（`AnimatedVisibility`）、两层内容（`HomeFadeLayer`）用同一个
-// [HomeSearchFadeMs]，所以三者的节奏是一致的。没有任何位移 —— 不用处理滑动误差，
+// 标题（`Crossfade`）、两层内容（`HomeFadeLayer`）用同一个
+// [HomeSearchFadeMs]，所以节奏是一致的。没有任何位移 —— 不用处理滑动误差，
 // 也不用担心键盘顶起时错位。
 //
 // ## 背景
@@ -92,11 +113,7 @@ import kotlinx.coroutines.launch
 // 因此本文件（以及 `HomeFeed` / `HomeSearchPanel`）**不铺任何不透明底色** —— 铺了就把
 // Aurora 背景闷死了。
 
-/** 形态切换的淡入淡出时长（标题 / 头像 / 内容层共用，保证三者节奏一致）。 */
 private const val HomeSearchFadeMs = 220
-
-/** 顶栏头像尺寸（对齐 Dart `Image.asset(width: 40, height: 40)`）。 */
-private val HomeHeaderAvatarSize = 40.dp
 
 /**
  * 主页。
@@ -114,6 +131,10 @@ private val HomeHeaderAvatarSize = 40.dp
 fun HomeScreen(
     st: SearchScreenState,
     homeFeed: HomeFeedState,
+    rankFeed: RankState,
+    newTab: NewTabState,
+    appleRank: AppleRankState,
+    qobuzDiscover: QobuzDiscoverState,
     dl: DownloadOrchestrator,
     uiViewModel: UiViewModel,
     selectionViewModel: SearchSelectionViewModel,
@@ -128,24 +149,51 @@ fun HomeScreen(
     // 区块操作（换风格 / 换一批）要发请求，需要一个与页面同寿命的作用域
     val homeScope = rememberCoroutineScope()
 
+    var refreshing by remember { mutableStateOf(false) }
+
     // 主页内容跟着「当前源」走：源变了就重新拉（同源且已加载时 HomeFeedState 内部短路）。
     // 放在这里而不是 browse 层内部，是因为搜索态期间也就顺手预热了，切回来不用等骨架屏。
     LaunchedEffect(st.searchPlatform) {
         homeFeed.load(st.searchPlatform)
     }
+    LaunchedEffect(st.searchPlatform, st.appleCountry, uiState.homeSection) {
+        if (uiState.homeSection != HomeSection.Rank) return@LaunchedEffect
+        if (st.searchPlatform == MusicPlatform.apple) {
+            appleRank.load(st.searchPlatform, st.appleCountry)
+        } else {
+            rankFeed.load(st.searchPlatform)
+        }
+    }
+    LaunchedEffect(st.searchPlatform, st.appleCountry) {
+        if (st.searchPlatform == MusicPlatform.apple) {
+            st.loadAppleStorefronts()
+            newTab.load(st.searchPlatform, st.appleCountry)
+        }
+    }
+    LaunchedEffect(st.searchPlatform) {
+        qobuzDiscover.load(st.searchPlatform)
+    }
 
     Box(modifier = modifier) {
-        // ── 背景层（最底层）：正在播放封面的取色氛围，两个形态共用 ──
-        CoverPaletteBackdrop(
-            sheen = false,
-            coverUrl = LocalAmbientCoverUrl.current,
-            palette = LocalCoverThemePalette.current,
-            modifier = Modifier.fillMaxSize(),
-        )
-
         Box(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
             Column(modifier = Modifier.fillMaxSize()) {
-                HomeTopBar(uiViewModel = uiViewModel, searchExpanded = searchExpanded)
+                HomeTopBar(
+                    uiViewModel = uiViewModel,
+                    searchExpanded = searchExpanded,
+                    // 多选簇只在「已选 > 0」时出现：多选入口是长按结果行，标题行不再兼任入口。
+                    // 抽屉的两个动作都由宿主执行，这里只交快照。
+                    selectionCount = selection.selectedSongs.size,
+                    onClearSelection = { selectionViewModel.clearAll() },
+                    onOpenSelectActions = {
+                        uiViewModel.openMultiSelectSheet(
+                            MultiSelectSheetState(
+                                songs = selection.selectedSongs,
+                                scope = PlaylistScope.online,
+                                origin = MultiSelectOrigin.Search,
+                            ),
+                        )
+                    },
+                )
 
                 // 两个形态叠在同一个 Box 里交叉淡化：exit 动画结束后旧的那层被移除，
                 // 所以不会挡住新层的点击。
@@ -159,38 +207,210 @@ fun HomeScreen(
                 Box(modifier = Modifier.weight(1f)) {
                     HomeFadeLayer(visible = !searchExpanded) {
                         modeStateHolder.SaveableStateProvider("home") {
-                            Column(modifier = Modifier.fillMaxSize()) {
-                                HomeSearchEntryRow(
-                                    onOpen = { uiViewModel.setHomeSearchExpanded(true) },
-                                )
-                                HomeFeed(
-                                    state = homeFeed,
-                                    currentSongId = currentSong?.id,
-                                    onPlay = { song, queue -> with(st) { handlePlaySong(song, queue) } },
-                                    onMore = { song -> dl.openActions(song) },
-                                    onOpenTarget = { target -> uiViewModel.pushRoute(target.toRoute()) },
-                                    onSeeAll = { cards ->
-                                        uiViewModel.pushRoute(
-                                            HomeShelfRoute(
-                                                HomeShelfAllData(
-                                                    title = cards.title,
-                                                    subtitle = cards.subtitle,
-                                                    items = cards.items,
-                                                ),
-                                            ),
-                                        )
-                                    },
-                                    onShelfAction = { action ->
-                                    // 「换一批」：原地重取当前平台，不换页面
+                            val isApple = st.searchPlatform == MusicPlatform.apple
+                            val isQobuz = st.searchPlatform == MusicPlatform.qobuz
+                            val onRefreshHome: () -> Unit = {
+                                if (!refreshing) {
                                     homeScope.launch {
-                                        when (action) {
-                                            HomeShelfAction.RefreshPicks -> homeFeed.refreshKugouPicks()
-                                            HomeShelfAction.CycleStyle -> Unit
+                                        refreshing = true
+                                        cacheService.openForceReadWindow()
+                                        when {
+                                            isQobuz ->
+                                                qobuzDiscover.load(st.searchPlatform, force = true)
+
+                                            isApple && uiState.homeSection == HomeSection.Rank ->
+                                                appleRank.load(
+                                                    st.searchPlatform,
+                                                    st.appleCountry,
+                                                    force = true,
+                                                )
+
+                                            isApple -> newTab.load(
+                                                st.searchPlatform,
+                                                st.appleCountry,
+                                                force = true,
+                                            )
+
+                                            uiState.homeSection == HomeSection.Rank ->
+                                                rankFeed.load(st.searchPlatform, force = true)
+
+                                            else -> homeFeed.load(st.searchPlatform, force = true)
                                         }
+                                        refreshing = false
                                     }
-                                },
-                                modifier = Modifier.weight(1f),
+                                }
+                            }
+                            Column(modifier = Modifier.fillMaxSize()) {
+                                HomeSectionRow(
+                                    section = uiState.homeSection,
+                                    appleOnly = isApple,
+                                    rankHidden = isQobuz,
+                                    st = st,
+                                    onSelect = { uiViewModel.setHomeSection(it) },
+                                    onOpenSearch = { uiViewModel.setHomeSearchExpanded(true) },
                                 )
+                                PullToRefreshBox(
+                                    isRefreshing = refreshing,
+                                    onRefresh = onRefreshHome,
+                                    modifier = Modifier.weight(1f),
+                                ) {
+                                if (isQobuz) {
+                                    QobuzDiscoverFeed(
+                                        state = qobuzDiscover,
+                                        onOpenTarget = { target ->
+                                            uiViewModel.pushRoute(target.toRoute())
+                                        },
+                                        onSeeAll = { section ->
+                                            uiViewModel.pushRoute(
+                                                QobuzSeeAllRoute(
+                                                    QobuzSeeAllData(
+                                                        title = section.title,
+                                                        baseline = section.baseline,
+                                                        kind = section.kind,
+                                                        items = section.items,
+                                                    ),
+                                                ),
+                                            )
+                                        },
+                                        onOpenTag = { item ->
+                                            uiViewModel.pushRoute(
+                                                QobuzTagRoute(
+                                                    slug = item.slug,
+                                                    title = item.title,
+                                                ),
+                                            )
+                                        },
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                } else if (isApple && uiState.homeSection == HomeSection.Recommend) {
+                                    NewTabFeed(
+                                        state = newTab,
+                                        currentSongId = currentSong?.id,
+                                        onPlaySong = { song, queue ->
+                                            with(st) { handlePlaySong(song, queue) }
+                                        },
+                                        onMore = { song -> dl.openActions(song) },
+                                        onOpenTarget = { target ->
+                                            uiViewModel.pushRoute(target.toRoute())
+                                        },
+                                        onOpenRoom = { roomId, title ->
+                                            uiViewModel.pushRoute(
+                                                NewTabRoomRoute(
+                                                    platform = st.searchPlatform,
+                                                    roomId = roomId,
+                                                    title = title,
+                                                ),
+                                            )
+                                        },
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                } else if (isApple) {
+                                    AppleRankFeed(
+                                        state = appleRank,
+                                        currentSongId = currentSong?.id,
+                                        onPlaySong = { song, queue ->
+                                            with(st) { handlePlaySong(song, queue) }
+                                        },
+                                        onMore = { song -> dl.openActions(song) },
+                                        onOpenTarget = { target ->
+                                            uiViewModel.pushRoute(target.toRoute())
+                                        },
+                                        onOpenRoom = { section ->
+                                            uiViewModel.pushRoute(
+                                                AppleRankRoomRoute(
+                                                    sectionId = section.id,
+                                                    title = section.title,
+                                                ),
+                                            )
+                                        },
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                } else if (uiState.homeSection == HomeSection.Rank) {
+                                    RankFeed(
+                                        state = rankFeed,
+                                        onOpenBoard = { board ->
+                                            homeScope.launch {
+                                                val detail = runCatching {
+                                                    fetchRankDetail(
+                                                        platform = st.searchPlatform,
+                                                        boardId = board.id,
+                                                        page = 1,
+                                                        pageSize = RankPageSize,
+                                                    )
+                                                }.getOrNull()
+                                                uiViewModel.pushRoute(
+                                                    RankDetailRoute(
+                                                        platform = st.searchPlatform,
+                                                        boardId = board.id,
+                                                        name = board.name,
+                                                        cover = board.cover,
+                                                        subtitle = board.subtitle,
+                                                        preload = detail
+                                                            ?.takeIf { it.songs.isNotEmpty() }
+                                                            ?.let {
+                                                                PlaylistDetailPreload(
+                                                                    name = it.title.ifBlank { board.name },
+                                                                    creator = it.subtitle.ifBlank { board.subtitle },
+                                                                    cover = it.cover.ifBlank { board.cover },
+                                                                    songs = it.songs,
+                                                                )
+                                                            },
+                                                    ),
+                                                )
+                                            }
+                                        },
+                                        onPlayTop = { board ->
+                                            homeScope.launch {
+                                                val detail = fetchRankDetail(
+                                                    platform = st.searchPlatform,
+                                                    boardId = board.id,
+                                                    page = 1,
+                                                    pageSize = RankPageSize,
+                                                )
+                                                val songs = detail?.songs.orEmpty()
+                                                if (songs.isNotEmpty()) {
+                                                    with(st) { handlePlaySong(songs.first(), songs) }
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                } else {
+                                    HomeFeed(
+                                        state = homeFeed,
+                                        currentSongId = currentSong?.id,
+                                        onPlay = { song, queue ->
+                                            with(st) { handlePlaySong(song, queue) }
+                                        },
+                                        onMore = { song -> dl.openActions(song) },
+                                        onOpenTarget = { target ->
+                                            uiViewModel.pushRoute(target.toRoute())
+                                        },
+                                        onSeeAll = { cards ->
+                                            uiViewModel.pushRoute(
+                                                HomeShelfRoute(
+                                                    HomeShelfAllData(
+                                                        title = cards.title,
+                                                        subtitle = cards.subtitle,
+                                                        items = cards.items,
+                                                    ),
+                                                ),
+                                            )
+                                        },
+                                        onShelfAction = { action ->
+                                            homeScope.launch {
+                                                when (action) {
+                                                    HomeShelfAction.RefreshPicks ->
+                                                        homeFeed.refreshKugouPicks()
+
+                                                    HomeShelfAction.CycleStyle -> Unit
+                                                }
+                                            }
+                                        },
+                                        modifier = Modifier.fillMaxSize(),
+                                    )
+                                }
+                                }
                             }
                         }
                     }
@@ -200,7 +420,6 @@ fun HomeScreen(
                                 st = st,
                                 dl = dl,
                                 uiViewModel = uiViewModel,
-                                selectionViewModel = selectionViewModel,
                                 selection = selection,
                                 downloadTasks = downloadTasks,
                                 currentSong = currentSong,
@@ -216,8 +435,7 @@ fun HomeScreen(
                 // 源切换按钮两个形态共用：浏览态切的是「主页内容源」，搜索态切的是「搜索源」，
                 // 背后是同一个 `searchPlatform`，所以两处永远指向同一个平台。
                 // 剩下的条件是「有浮层 / 进了子页面时让位」，与形态无关。
-                if (mode != ModeDropdownMode.qobuz &&
-                    !uiState.drawerVisible &&
+                if (!uiState.drawerVisible &&
                     !uiState.playerOverlayVisible &&
                     uiState.pageStack.isEmpty()
                 ) {
@@ -235,13 +453,21 @@ fun HomeScreen(
 /**
  * 主页顶栏。
  *
- * 标题在「安妮音乐盒 / 搜索」之间交叉淡化；头像在进入搜索态时淡出
- * （搜索框会一直延伸到屏幕右侧，头像需要让位）。
+ * 标题在「主页 / 搜索」之间交叉淡化。
+ *
+ * 搜索态右侧的位置交给多选簇（`清空 · 已选 N 首 · ⇉`）：它的图标命中区与搜索框右端的
+ * 放大镜同为「44dp + 右内缩 16dp」，两者同心 —— 图标正好落在放大镜那一列。
  */
 @Composable
-private fun HomeTopBar(uiViewModel: UiViewModel, searchExpanded: Boolean) {
+private fun HomeTopBar(
+    uiViewModel: UiViewModel,
+    searchExpanded: Boolean,
+    selectionCount: Int,
+    onClearSelection: () -> Unit,
+    onOpenSelectActions: () -> Unit,
+) {
     AppTopBar(
-        title = "安妮音乐盒",
+        title = "主页",
         onOpenMenu = { uiViewModel.setDrawerVisible(true) },
         titleContent = {
             Crossfade(
@@ -250,7 +476,7 @@ private fun HomeTopBar(uiViewModel: UiViewModel, searchExpanded: Boolean) {
                 label = "homeTitle",
             ) { expanded ->
                 Text(
-                    text = if (expanded) "搜索" else "安妮音乐盒",
+                    text = if (expanded) "搜索" else "主页",
                     color = AppColors.white,
                     fontSize = AppFontSize.size26,
                     fontWeight = AppFontWeight.bold,
@@ -259,19 +485,11 @@ private fun HomeTopBar(uiViewModel: UiViewModel, searchExpanded: Boolean) {
             }
         },
         trailing = {
-            AnimatedVisibility(
-                visible = !searchExpanded,
-                enter = fadeIn(tween(HomeSearchFadeMs)),
-                exit = fadeOut(tween(HomeSearchFadeMs)),
-            ) {
-                // Dart: Image.asset('assets/annie.jpg')
-                Image(
-                    painter = painterResource(R.drawable.annie),
-                    contentDescription = null,
-                    modifier = Modifier
-                        .size(HomeHeaderAvatarSize)
-                        .clip(RoundedCornerShape(AppRadius.r10)),
-                    contentScale = ContentScale.Crop,
+            if (searchExpanded) {
+                MultiSelectHeaderActions(
+                    count = selectionCount,
+                    onClear = onClearSelection,
+                    onOpenActions = onOpenSelectActions,
                 )
             }
         },
@@ -286,7 +504,14 @@ private fun HomeTopBar(uiViewModel: UiViewModel, searchExpanded: Boolean) {
  * 图标 17dp、同一个 `SearchBarMagnifierGlyph`。改这里必须同步改那边。
  */
 @Composable
-private fun HomeSearchEntryRow(onOpen: () -> Unit) {
+private fun HomeSectionRow(
+    section: HomeSection,
+    appleOnly: Boolean,
+    rankHidden: Boolean,
+    st: SearchScreenState,
+    onSelect: (HomeSection) -> Unit,
+    onOpenSearch: () -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -296,16 +521,59 @@ private fun HomeSearchEntryRow(onOpen: () -> Unit) {
                 bottom = AppSpacing.sp8,
             ),
         verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(AppSpacing.sp8),
     ) {
+        HomeSectionPill(
+            label = if (appleOnly) "新发现" else "推荐",
+            selected = section == HomeSection.Recommend,
+            onClick = { onSelect(HomeSection.Recommend) },
+        )
+        if (!rankHidden) {
+            HomeSectionPill(
+                label = "排行榜",
+                selected = section == HomeSection.Rank,
+                onClick = { onSelect(HomeSection.Rank) },
+            )
+        }
         Spacer(modifier = Modifier.weight(1f))
         Box(
             modifier = Modifier
                 .size(AppSize.detailDownloadBarHeight)
-                .clickableRipple(onOpen),
+                .clickableRipple(onOpenSearch),
             contentAlignment = Alignment.Center,
         ) {
             SearchBarMagnifierGlyph(modifier = Modifier.size(17.dp))
         }
+        if (appleOnly && st.showAppleCountry) {
+            AppleCountryButton(
+                code = st.appleCountry,
+                storefronts = st.appleStorefronts,
+                loading = st.appleStorefrontsLoading,
+                error = st.appleStorefrontsError,
+                onSelect = { st.selectAppleCountry(it) },
+                onOpen = { st.loadAppleStorefronts() },
+                onRetry = { st.loadAppleStorefronts(force = true) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeSectionPill(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .clip(RoundedCornerShape(AppRadius.pill))
+            .background(if (selected) AppColors.white12 else AppColors.whiteA03)
+            .clickableRipple(onClick)
+            .padding(horizontal = AppSpacing.sp14, vertical = AppSpacing.sp8),
+    ) {
+        Text(
+            text = label,
+            color = if (selected) AppColors.textPrimary else AppColors.textSecondary,
+            fontSize = AppFontSize.size15,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            maxLines = 1,
+        )
     }
 }
 

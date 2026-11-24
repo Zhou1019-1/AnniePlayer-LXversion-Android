@@ -41,6 +41,10 @@ constexpr int kPacketsPerUrb = 24;
 // 内核那边 URB 一用尽 DAC 就断（听感是断续，再久被判停滞直接掐流）。
 // 21 条 × 24 包 = 63 ms：深度与原来的 64 条 × 8 包持平，**唤醒次数降到三分之一**。
 constexpr int kUrbCount = 21;
+constexpr int kFadeMs = 2;
+constexpr int kDrainTimeoutMs = 250;
+constexpr int kFadePackets = kFadeMs * ( kMicroframesPerSecond / 1000 );
+constexpr int kFadeStepQ16 = 65536 / ( kFadePackets > 0 ? kFadePackets : 1 );
 /** 
 * 反馈端点一批读几个微帧。 
 * 
@@ -744,13 +748,19 @@ libusb_transfer* fbTransfer = nullptr;
 {
  0 
 }
-;    /**     
-* 上一次「运行中换率」是否被设备接受。     
-*     
-* 有些固件只在 alt 0 下接受 `SET_CUR`。被拒一次之后就**不再白付那次控制传输**，     
-* 直接走拆流重建 —— 否则每次切歌都多一次注定失败、还要等超时的同步请求。     */
-    bool runtimeRateSwitchOk = true;
+;
     uint32_t accQ16 = 0;
+    std::atomic< bool > startPending
+{
+ false
+}
+;
+    std::atomic< bool > drainPending
+{
+ false
+}
+;
+    size_t primeFrames = 0;
     std::thread worker;
     std::vector< Urb > urbs;
     bool interfaceClaimed = false;    
@@ -849,6 +859,36 @@ libusb_transfer* fbTransfer = nullptr;
  0 
 }
 ;
+    std::atomic< bool > fadeOutRequested
+{
+ false 
+}
+;
+    std::atomic< bool > fadeInRequested
+{
+ false 
+}
+;
+    std::atomic< bool > flushPending
+{
+ false 
+}
+;
+    std::atomic< uint32_t > padAfterFlush
+{
+ 0 
+}
+;
+    std::atomic< int > fadeQ16
+{
+ 0 
+}
+;
+    std::atomic< int > fadeOutBudget
+{
+ 0 
+}
+;
     bool open( int fd, int wantRate, int wantEncoding, int wantChannels, std::string& why,               bool wantRaw = false, int wantWire = 0 )    
 {
         sampleRate = wantRate;
@@ -894,70 +934,46 @@ paused.store( false, std::memory_order_release );
 *     
 * 附带还有一处白掉的时长：`startStream` 之后环是空的，第一批 URB 必然送静音     
 * （约 32 ms），每次换率都付一次。不拆流就没有这一段。     */
-    bool reopen( int rate, int wantEncoding, int wantChannels, std::string& why,                 bool wantRaw = false, int wantWire = 0 )    
+    bool switchFormat( int rate, int wantEncoding, int wantChannels, std::string& why,                 bool wantRaw = false, int wantWire = 0 )    
 {
-        
-// 每微帧要送多少字节（多算一帧余量），与 `fill()` 的 `maxSamples` 同一口径
-const size_t needPerMicroframe =            ( static_cast< size_t >( rate ) * outFrameBytes ) / kMicroframesPerSecond +            outFrameBytes;        
-// 位宽只要**装得下**就留在原地：宽容器装窄内容不丢位（`fill()` 先左对齐到 Q31        
-// 再按 subslot 落地），窄容器装宽内容才真的截断。
-const bool wireFits = wantWire <= 0 || profile.subslot * 8 >= wantWire;
-        const bool canStay = runtimeRateSwitchOk && wantRaw == rawDsd &&                             wantChannels == channels && wireFits && profile.clockId > 0 &&                             static_cast< size_t >( profile.maxPacket ) >= needPerMicroframe;
-        if( canStay )        
-{
-            const int state = setRate( profile.clockId, rate );
-            if( state >= 0 )            
-{
-                sampleRate = rate;
-                inEncoding = wantEncoding;
-                wireBits = wantWire;
-                perMicroframeQ16.store(                    ( static_cast< int64_t >( rate ) << 16 ) / kMicroframesPerSecond,                    std::memory_order_release );
-                accQ16 = 0;                
-// **反馈值必须作废。** 它报的是设备侧的每微帧样本数，换率之后旧的读数                
-// 按新率解释就是错的包长；`onFeedback` 只在偏离名义率 0.5x–2x **之外**                
-// 才丢弃，44.1k↔48k 这种小改正好落在区间内，会被当真。                
-// 清零之后 `fill()` 退回名义率，下一次反馈回来（1 ms 内）再跟。
-feedbackQ16.store( 0, std::memory_order_relaxed );
-                fbMin.store( 0, std::memory_order_relaxed );
-                fbMax.store( 0, std::memory_order_relaxed );
-                fbCount.store( 0, std::memory_order_relaxed );                
-// 环里还压着**上一首（旧率）**的数据：不丢的话它会被按新率播出去，                
-// 那一段音高全错。`flushRequested` 由 worker 线程在 `fill()` 里执行，                
-// 读指针只在那边动，安全。
-flushTarget.store( ring.writtenBytes(), std::memory_order_relaxed );
-                flushRequested.store( true, std::memory_order_release );                
-// 设备重锁 PLL 的那几毫秒里，通道相位可能解错（听感"一路先哑"）。                
-// 垫 10 ms 静音把它盖住；静音不计 `framesRead`，时间轴不受影响。
-padFramesLeft.store(                    static_cast< uint32_t >( std::max( sampleRate / 100, 64 )),                    std::memory_order_release );
-                detail += state == 1 ? "⟳ 只换时钟（alt 未动）✔\n"                                     : "⟳ 只换时钟（alt 未动）⚠ 率未回读\n";
-                pushEvent( kEvReopenSeamless, rate, state );
-                return( true );
-            
+        drainForSwitch();
+        if( !teardownForSwitch( why )) return( false );
+        applySwitchTarget( rate, wantEncoding, wantChannels, wantRaw, wantWire );
+        return( startStream( why ));
 }
-            
-            // 设备拒绝"运行中换率"：记住这件事，之后不再白付这次注定失败的控制传输
-            runtimeRateSwitchOk = false;
-            detail += "⛔ 设备拒绝运行中换率，改用拆流重建\n";
-        
-}
-        if( !stopStream())        
+
+    bool drainForSwitch()    
 {
-            why = "上一条流未排空";
-            return( false );
-        
-}
+        fadeOutRequested.store( true, std::memory_order_release );
+        std::this_thread::sleep_for( std::chrono::milliseconds( kFadeMs + 2 ));
+        drainPending.store( true, std::memory_order_release );
+        const auto deadline = std::chrono::steady_clock::now() +
+            std::chrono::milliseconds( kDrainTimeoutMs );
+        while( inFlight.load( std::memory_order_acquire ) > 0 &&
+               std::chrono::steady_clock::now() < deadline )
+        {
+            std::this_thread::sleep_for( std::chrono::milliseconds( 2 ));
+        }
+        drainPending.store( false, std::memory_order_release );
+        return( inFlight.load( std::memory_order_acquire ) == 0 );
+    }
+
+    bool teardownForSwitch( std::string& why )    
+{
+        if( stopStream()) return( true );
+        why = "上一条流未排空";
+        return( false );
+    }
+
+    void applySwitchTarget( int rate, int wantEncoding, int wantChannels, bool wantRaw, int wantWire )    
+{
         detail += "⛔ 拆流重建（alt 需要换）\n";
         sampleRate = rate;
         inEncoding = wantEncoding;
-        channels = wantChannels;        
-// raw 与否决定选哪个 alt（raw 与 PCM 的 alt 是互斥的），换曲换模式时必须跟着变，        
-// 否则会拿 PCM alt 去送 32 bit DSD word —— 听感是满幅噪声，而且完全不报错。
-        rawDsd = wantRaw;        
-// 位宽同理：换曲可能换位深，沿用上一条的 alt 会把 24 bit 截成 16 bit
+        channels = wantChannels;
+        rawDsd = wantRaw;
         wireBits = wantWire;
         pushEvent( kEvReopenRebuild, rate, 0 );
-        return( startStream( why ));
-    
 }
     /**     
 * 环形缓冲要开多大 —— **按这条 alt 能承载的最高率算，与当前曲目无关**。     
@@ -1253,7 +1269,8 @@ ring.init( ringCapacityBytes( pipeFrames ), outFrameBytes );
 padFramesLeft.store( 0, std::memory_order_release );
         stop.store( false, std::memory_order_release );
         dead.store( false, std::memory_order_release );
-        pushEvent( kEvStreamStart, sampleRate, channels );        
+        primeFrames = static_cast< size_t >( std::max( sampleRate, 8000 ) / 50 );
+        startPending.store( true, std::memory_order_release );        
 // 新流一律回到"播放"态。
 //        
 // 曾经刻意不清，让 `reopen()` 的拆流重建继承上一条流的暂停状态（为了"暂停中换率
@@ -1264,6 +1281,12 @@ padFramesLeft.store( 0, std::memory_order_release );
 // 真正的播放意图由 `AaudioSink.configure()` 在返回前按 `playRequested` 纠正：
 // 三个分支末尾都写了 `resume` / `pause`，所以这里清成 false 只会让"本该播"立刻出声。
         paused.store( false, std::memory_order_release );
+        fadeQ16.store( 0, std::memory_order_release );
+        fadeOutBudget.store( 0, std::memory_order_release );
+        fadeOutRequested.store( false, std::memory_order_release );
+        flushPending.store( false, std::memory_order_release );
+        padAfterFlush.store( 0, std::memory_order_release );
+        fadeInRequested.store( true, std::memory_order_release );
         error = 0;
         urbs.resize( kUrbCount );
         for( auto& urb : urbs )        
@@ -2010,6 +2033,15 @@ if( transfer->status == LIBUSB_TRANSFER_CANCELLED &&                self->stop.l
 }
     
 }
+    void refillWhenPrimed() {
+        if( drainPending.load( std::memory_order_acquire )) return;
+        if( startPending.load( std::memory_order_acquire )) {
+            if( ring.readableFrames() < primeFrames ) return;
+            startPending.store( false, std::memory_order_release );
+            pushEvent( kEvStreamStart, sampleRate, channels );
+        }
+        refill();
+    }
     /** 按在飞数量补齐流水线。内核在 HCD 完成上下文里重提，不受用户态调度影响；我们必须自己补。 */
     void refill()    
 {
@@ -2082,7 +2114,21 @@ if( transfer->status == LIBUSB_TRANSFER_CANCELLED &&                self->stop.l
 // 抢同一个变量：轻则读指针回退（重放旧音频），重则 `readPos > writePos`。
 if( flushRequested.exchange( false, std::memory_order_acq_rel ))        
 {
+            flushPending.store( true, std::memory_order_release );
+            fadeOutRequested.store( true, std::memory_order_release );
+        
+}
+        if( flushPending.load( std::memory_order_acquire ) &&            fadeQ16.load( std::memory_order_acquire ) == 0 )        
+{
             ring.discardTo( flushTarget.load( std::memory_order_relaxed ));
+            flushPending.store( false, std::memory_order_release );
+            const uint32_t pad = padAfterFlush.exchange( 0, std::memory_order_acq_rel );
+            if( pad > 0 )            
+{
+                padFramesLeft.store( pad, std::memory_order_release );
+            
+}
+            fadeInRequested.store( true, std::memory_order_release );
         
 }
         
@@ -2117,7 +2163,43 @@ const int64_t fb = feedbackQ16.load( std::memory_order_relaxed );
                 padFramesLeft.store(                    static_cast< uint32_t >( padLeft - pad ), std::memory_order_release );
             
 }
-            if( paused.load( std::memory_order_acquire ) || dead.load( std::memory_order_acquire ))            
+            if( fadeOutRequested.load( std::memory_order_acquire ))            
+{
+                const int next = std::max( 0, fadeQ16.load( std::memory_order_relaxed ) - kFadeStepQ16 );
+                fadeQ16.store( next, std::memory_order_release );
+                if( next == 0 )                
+{
+                    fadeOutRequested.store( false, std::memory_order_release );
+                
+}
+            
+}            else if( fadeInRequested.load( std::memory_order_acquire ))            
+{
+                const int next = std::min( 65536, fadeQ16.load( std::memory_order_relaxed ) + kFadeStepQ16 );
+                fadeQ16.store( next, std::memory_order_release );
+                if( next == 65536 )                
+{
+                    fadeInRequested.store( false, std::memory_order_release );
+                
+}
+            
+}
+            const int envQ16 = fadeQ16.load( std::memory_order_acquire );
+            const bool stopping = paused.load( std::memory_order_acquire ) ||                dead.load( std::memory_order_acquire );
+            if( stopping )            
+{
+                const int left = fadeOutBudget.load( std::memory_order_relaxed ) - 1;
+                fadeOutBudget.store( left, std::memory_order_relaxed );
+                if( left <= 0 )                
+{
+                    fadeQ16.store( 0, std::memory_order_release );
+                
+}
+            
+}
+            const bool hardStop = stopping &&                ( fadeQ16.load( std::memory_order_acquire ) == 0 ||
+                    fadeOutBudget.load( std::memory_order_relaxed ) <= 0 );
+            if( hardStop )            
 {
                 silenceFill( dst, bytes );
             
@@ -2149,7 +2231,8 @@ const int64_t fb = feedbackQ16.load( std::memory_order_relaxed );
 // 异步更新的，切模式那几块数据并不可靠 —— 这里读的是本条流自己的 `rawDsd`。
 if( !rawDsd )                    
 {
-                        applyGain(                        dst + pad * outFrameBytes,                        got * static_cast< size_t >( channels ),                        outFrameBytes / static_cast< size_t >( channels ),                        gainQ16.load( std::memory_order_acquire ));
+                        const int64_t scaled = ( static_cast< int64_t >( gainQ16.load( std::memory_order_acquire )) * envQ16 ) >> 16;
+                        applyGain(                        dst + pad * outFrameBytes,                        got * static_cast< size_t >( channels ),                        outFrameBytes / static_cast< size_t >( channels ),                        static_cast< int32_t >( scaled ));
                     
 }
                 }
@@ -2186,7 +2269,7 @@ setpriority( PRIO_PROCESS, 0, 0 );
 {
         raiseWorkerPriority();
         submitFeedback();
-        refill();
+        refillWhenPrimed();
         while( !stop.load( std::memory_order_acquire ) && !dead.load( std::memory_order_acquire ))        
 {
             
@@ -2236,7 +2319,7 @@ const bool isPaused = paused.load( std::memory_order_acquire );
 }
 ;
             libusb_handle_events_timeout_completed( ctx, &tv, nullptr );
-            refill();            
+            refillWhenPrimed();
 // 音量下发在这里做：**不能**放到播放线程（一次控制传输几百微秒起，            
 // 那条线程每毫秒都要交 URB）。已挂起的值取一次就清，不会堆积。
             applyPendingHardwareVolume();
@@ -2299,6 +2382,7 @@ inFlight.fetch_sub( 1, std::memory_order_release );
     bool stopStream()    
 {
         stop.store( true, std::memory_order_release );        
+        startPending.store( false, std::memory_order_release );
         // 事件线程可能正停在暂停的条件变量上，必须叫醒，否则 join 会一直等
         pauseCv.notify_all();
         if( worker.joinable())        
@@ -2467,7 +2551,7 @@ Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeUacStream_nativeReopen
 }
     g_lastError = 0;
     std::string why;
-    if( !s->reopen( sampleRate, encoding, channels, why, /*wantRaw=*/
+    if( !s->switchFormat( sampleRate, encoding, channels, why, /*wantRaw=*/
 false, wireBits ))    
 {
         g_lastError = s->error;
@@ -2489,7 +2573,7 @@ Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeUacStream_nativeReopen
     g_lastError = 0;
     std::string why;    
 // 22 与 `nativeOpenRaw` 同源：raw DSD 的 32 bit word 必须走 `fill()` 的恒等分支
-if( !s->reopen( wordRate, 22, channels, why, /*wantRaw=*/
+if( !s->switchFormat( wordRate, 22, channels, why, /*wantRaw=*/
 true ))    
 {
         g_lastError = s->error;
@@ -2716,7 +2800,9 @@ Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeUacStream_nativePause(
 {
     if( UacStream* s = asStream( handle ); s != nullptr )    
 {
-        s->paused.store( true, std::memory_order_release );        
+        s->paused.store( true, std::memory_order_release );
+        s->fadeOutBudget.store( kFadePackets, std::memory_order_release );
+        s->fadeOutRequested.store( true, std::memory_order_release );
 // pause 本身让 `refill()` 停下，但已经提交的 URB 还在内核里排着；        
 // 叫醒事件线程让它走回暂停分支，之后就再也不收事件、不重提交了。
         s->pauseCv.notify_all();
@@ -2729,6 +2815,7 @@ Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeUacStream_nativeResume
     if( UacStream* s = asStream( handle ); s != nullptr )    
 {
         s->paused.store( false, std::memory_order_release );
+        s->fadeInRequested.store( true, std::memory_order_release );
         s->pauseCv.notify_all();
     
 }
@@ -2765,6 +2852,16 @@ const uint64_t w = s->ring.writtenBytes();
 }
     s->flushTarget.store( target, std::memory_order_relaxed );
     s->flushRequested.store( true, std::memory_order_release );
+    if( s->paused.load( std::memory_order_acquire ))    
+{
+        s->fadeQ16.store( 0, std::memory_order_release );
+        s->fadeOutRequested.store( false, std::memory_order_release );
+    
+}    else    
+{
+        s->fadeOutRequested.store( true, std::memory_order_release );
+    
+}
 }
 extern "C" JNIEXPORT void JNICALL
 Java_com_annieplayer_annie_1music_kt_core_audio_dsp_NativeUacStream_nativeSetEncoding(        JNIEnv* /* env */, jclass /* 静态方法 */, jlong handle, jint encoding )

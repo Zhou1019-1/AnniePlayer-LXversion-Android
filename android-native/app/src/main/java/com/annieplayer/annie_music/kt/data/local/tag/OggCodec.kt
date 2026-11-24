@@ -185,11 +185,7 @@ internal object OggCodec : TagCodec {
         val (packets, headerEnd) = readHeaderPackets(file) ?: return WriteResult.fail(format, "读不到头部页群")
         val oldComment = packets[1]
         val existing = runCatching { read(file) }.getOrNull()
-        val merged = TagBag(
-            text = (existing?.text.orEmpty() + bag.text).filterValues { it.isNotEmpty() },
-            cover = bag.cover ?: existing?.cover,
-            extra = (existing?.extra.orEmpty() + bag.extra).filterValues { it.isNotEmpty() },
-        )
+        val merged = bag.mergedWith(existing)
         val prefix = commentPrefix(oldComment)
         val isVorbis = prefix.size == 7 && (prefix[0].toInt() and 0xFF) == 3
         // Vorbis 的 comment 包结尾有一个 **framing bit**（1 字节 0x01），少了它 libvorbis

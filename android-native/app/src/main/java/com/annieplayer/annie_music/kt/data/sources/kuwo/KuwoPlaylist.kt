@@ -2,7 +2,15 @@ package com.annieplayer.annie_music.kt.data.sources.kuwo
 
 import com.annieplayer.annie_music.kt.data.model.MusicPlatform
 import com.annieplayer.annie_music.kt.data.model.Playlist
+import com.annieplayer.annie_music.kt.data.model.Song
 import com.annieplayer.annie_music.kt.data.network.httpGetJson
+import com.annieplayer.annie_music.kt.data.sources.common.asText
+import com.annieplayer.annie_music.kt.data.sources.common.decodeHtmlEntities
+import com.annieplayer.annie_music.kt.data.sources.common.firstTruthy
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Semaphore
+import java.util.concurrent.ConcurrentHashMap
 
 // ================================================================================================
 // 酷我歌单（`pl.svc`，按 100 条分页累加）
@@ -19,7 +27,7 @@ private suspend fun _fetchKuwoPage(playlistId: String, pn: Int, pageSize: Int): 
         val resp = httpGetJson(url, mapOf("User-Agent" to kuwoDesktopUa))
         if (kuwoStrOr(resp["result"], "") != "ok") return null
         KuwoPage(
-            songs = kuwoMapList(resp["musiclist"]).map { kuwoMapSong(it) },
+            songs = _applyKuwoArtistCredits(kuwoMapList(resp["musiclist"])),
             total = kuwoInt(resp["total"]),
             name = kuwoStrOr(resp["title"], ""),
             creator = kuwoStrOr(resp["uname"], ""),
@@ -51,9 +59,67 @@ suspend fun getKuwoPlaylist(playlistId: String): Playlist? {
         id = playlistId,
         name = first.name,
         creator = first.creator,
-        cover = first.cover.replaceFirst("/120/", "/800/"),
+        cover = kuwoCoverAtSize(first.cover),
         platform = MusicPlatform.kuwo,
         songs = allSongs,
         songCount = allSongs.size,
     )
+}
+
+private val kuwoMultiArtistSeparators = Regex("[&,、/]")
+
+private suspend fun _fetchKuwoArtistCredits(
+    rids: List<String>,
+): Map<String, List<Pair<String, String>>> {
+    if (rids.isEmpty()) return emptyMap()
+    val out = ConcurrentHashMap<String, List<Pair<String, String>>>()
+    val gate = Semaphore(4)
+    coroutineScope {
+        for (rid in rids) {
+            launch {
+                gate.acquire()
+                try {
+                    runCatching {
+                        val url =
+                            "http://sartist.kuwo.cn/qi.s?rid=$rid&newver=3&encoding=utf8&isMultiArtists=1"
+                        val resp = httpGetJson(url, mapOf("User-Agent" to kuwoDesktopUa))
+                        val artists = resp["artists"] as? List<*> ?: return@runCatching
+                        val pairs = artists.mapNotNull { entry ->
+                            val m = entry as? Map<*, *> ?: return@mapNotNull null
+                            val name = decodeHtmlEntities(asText(m["artistName"]))
+                            if (name.isEmpty()) return@mapNotNull null
+                            name to asText(m["artistID"])
+                        }
+                        if (pairs.isNotEmpty()) out[rid] = pairs
+                    }
+                } finally {
+                    gate.release()
+                }
+            }
+        }
+    }
+    return out
+}
+
+private suspend fun _applyKuwoArtistCredits(items: List<Map<String, Any?>>): List<Song> {
+    val rids = items.mapNotNull { item ->
+        if (!kuwoMultiArtistSeparators.containsMatchIn(asText(item["artist"]))) return@mapNotNull null
+        asText(firstTruthy(listOf(item["id"], item["rid"], item["musicrid"])))
+            .replaceFirst("MUSIC_", "")
+            .takeIf { it.isNotEmpty() }
+    }.distinct()
+    val credits = _fetchKuwoArtistCredits(rids)
+    return items.map { item ->
+        val song = kuwoMapSong(item)
+        val credit = credits[song.id]
+        if (credit == null) {
+            song
+        } else {
+            song.copy(
+                artist = credit.joinToString(" / ") { it.first },
+                artistNames = credit.map { it.first },
+                artistIds = credit.map { it.second },
+            )
+        }
+    }
 }

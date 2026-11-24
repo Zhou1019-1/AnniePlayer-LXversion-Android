@@ -29,6 +29,9 @@ enum class AppTab {
 
     /** 本地曲库 */
     Library,
+
+    /** 工具箱（局域网遥控等外部设备工具） */
+    Tools,
 }
 
 /**

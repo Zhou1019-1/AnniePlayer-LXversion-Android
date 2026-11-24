@@ -44,8 +44,10 @@ data class KugouArtistInfo(
     val intro: String = "",
 )
 
-/** 专辑信息：发行日期 / 专辑歌手（`album/song` 都不带，需另取 `album/info`） */
+/** 专辑信息：发行日期 / 专辑歌手 / 唱片公司（`album/song` 都不带，需另取 `album/info`） */
 internal data class KugouAlbumInfo(
     val pub: String,
     val albumArtist: String,
+    /** 唱片公司（`data.company`）；没给就是空串 */
+    val company: String = "",
 )

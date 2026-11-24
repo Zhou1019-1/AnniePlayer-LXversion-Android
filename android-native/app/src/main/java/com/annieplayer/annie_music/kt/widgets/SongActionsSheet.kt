@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -26,6 +27,7 @@ import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -145,6 +147,13 @@ fun SongActionsSheet(
      */
     onDelete: (Song) -> Unit = {},
     /**
+     * 本地歌曲的「编辑元数据」：详情面板底部那个按钮。
+     *
+     * 与 [onDelete] 同一套顺序：面板先自己收起，再由宿主压入编辑页
+     * （编辑页是 L1 页面栈的一层，压在曲库主页之上，返回逐层退回）。
+     */
+    onEditMetadata: (Song) -> Unit = {},
+    /**
      * 「跳转到歌单」的目标：当前播放队列来自某个歌单时才有（`PlayerState.queuePlaylist`）。
      *
      * 挂在全局 ⋮ 面板上而不是某个页面里 —— 从歌单开播之后，无论在播放页、搜索页、
@@ -208,23 +217,27 @@ fun SongActionsSheet(
             visible = visible && song != null,
             title = "歌曲操作",
             onClose = onClose,
-            // 高度上限 = 面板可用高度全额（扣抓手 / 标题 / 底部 inset 之后）。
-            // 也就是「能长多高长多高，顶到屏幕才开始滚」—— 内容刚好多到 1~2 行时
-            // 面板会就地变高，不会立刻出现滚动条。原行为（null）在小屏上会把抓手和标题顶出屏幕。
             contentMaxHeightFraction = 1f,
+            maxPanelHeightFraction = 0.85f,
         ) {
             // ── 身份 ──
             // 面板标题只说「歌曲操作」，不说操作的是哪首；从播放页 / 搜索页 / 歌手页
             // 打开都一样。先把对象摆出来，下面两组的动作才有主语。
             val current = song
             if (current != null) {
+                val heroTitle = current.title.ifBlank { "未知标题" }
+                val heroSubtitle = listOfNotNull(current.artist, current.album)
+                    .filter { it.isNotBlank() }
+                    .joinToString(" · ")
+                    .ifBlank { "未知艺术家" }
                 SheetHeroCard(
-                    title = current.title.ifBlank { "未知标题" },
-                    subtitle = listOfNotNull(current.artist, current.album)
-                        .filter { it.isNotBlank() }
-                        .joinToString(" · ")
-                        .ifBlank { "未知艺术家" },
+                    title = heroTitle,
+                    subtitle = heroSubtitle,
                     cover = current.cover.takeIf { it.isNotBlank() },
+                    // 标题、歌手、专辑各一个复制按钮，都贴在各自文字后面
+                    titleCopy = heroTitle,
+                    subtitleFields = listOfNotNull(current.artist, current.album)
+                        .filter { it.isNotBlank() },
                 )
             }
 
@@ -252,7 +265,26 @@ fun SongActionsSheet(
             )
 
             if (isLocalSong) {
-                // 本地文件：第一行是「歌曲详情」（替代流媒体的「下载」）。
+                // 本地文件：编辑元数据 + 歌曲详情（替代流媒体的「下载」）。
+                // 「编辑元数据」压在「歌曲详情」上面：详情是**看**，编辑是**改**，
+                // 改完还想核对就往下点一行，不用退出去重开面板。
+                SongActionsRow(
+                    icon = { tint ->
+                        Icon(
+                            imageVector = Icons.Default.Edit,
+                            contentDescription = null,
+                            tint = tint,
+                            modifier = Modifier.size(AppIconSize.icon22),
+                        )
+                    },
+                    label = "编辑元数据",
+                    subtitle = "标题 / 艺术家 / 专辑 / 封面… 写入文件",
+                    showsChevron = false,
+                    onTap = {
+                        val target = song ?: return@SongActionsRow
+                        onEditMetadata(target)
+                    },
+                )
                 // 图标用信息圆点 —— 之前复用了「跳转到专辑」的唱片图标，两行长得一模一样。
                 SongActionsRow(
                     icon = { tint ->
@@ -705,7 +737,7 @@ fun ArtistPickerSheet(
  * 用枚举而不是三个 `Color?` 参数：颜色的**组合**（底片 / 图标 / 文字）必须同步变化，
  * 分开传就会出现「红字配主色底片」这种没人想过的中间态。
  */
-private enum class SongActionTone { Neutral, Accent, Danger }
+internal enum class SongActionTone { Neutral, Accent, Danger }
 
 /**
  * 面板行：图标 + 文案 + 可选副标题 + 可选右箭头，行高 ≈66dp。
@@ -727,7 +759,7 @@ private enum class SongActionTone { Neutral, Accent, Danger }
  * （surface 上 6.84:1）；功能说明（「选择音质」）是注解，压到 38%（3.54:1）。
  */
 @Composable
-private fun SongActionsRow(
+internal fun SongActionsRow(
     icon: @Composable (tint: Color) -> Unit,
     label: String,
     onTap: () -> Unit,

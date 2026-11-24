@@ -19,7 +19,7 @@ import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 /**
  * 主页面共享顶栏（Android-only 抽取）：汉堡菜单按钮 + 大标题（+ 可选后缀 / 右侧插槽）。
  *
- * 抽出的动机：搜索页（「安妮音乐盒」）与本地曲库页（「本地曲库」）需要**完全一致**的标题
+ * 抽出的动机：搜索页（「主页」）与本地曲库页（「本地曲库」）需要**完全一致**的标题
  * 排版与顶栏间距 —— 由本组件单点维护标题 token（[AppFontSize.size26] /
  * [AppFontWeight.bold] / [AppLetterSpacing.tight]）与内边距（16 / 40 / 16 / 20，
  * 对齐 Flutter `home_screen` 顶栏），避免两页各写一份造成漂移。
@@ -29,7 +29,7 @@ import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
  * @param titleAdornment 紧跟标题之后的可选装饰（如本地曲库页的「建设中」角标）；默认无。
  * @param trailing 顶栏最右侧的可选插槽（如搜索页头像）；默认无。
  * @param titleContent 标题插槽：传入时**替代** [title] 的默认文本。
- *        用于需要标题本身做动画的场景（搜索态「安妮音乐盒 → 搜索」的淡入淡出）。
+ *        用于需要标题本身做动画的场景（搜索态「主页 → 搜索」的淡入淡出）。
  *        传入方需自行套用与默认实现相同的 token
  *        （[AppFontSize.size26] / [AppFontWeight.bold] / [AppLetterSpacing.tight] / 纯白）。
  */

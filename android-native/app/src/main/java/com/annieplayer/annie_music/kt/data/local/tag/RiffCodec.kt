@@ -158,11 +158,7 @@ internal object RiffCodec : TagCodec {
     override fun write(file: File, bag: TagBag, policy: WritePolicy): WriteResult {
         val layout = walk(file) ?: return WriteResult.fail(format, "不是 RIFF/AIFF 文件")
         val existing = runCatching { read(file) }.getOrNull()
-        val merged = TagBag(
-            text = (existing?.text.orEmpty() + bag.text).filterValues { it.isNotEmpty() },
-            cover = bag.cover ?: existing?.cover,
-            extra = (existing?.extra.orEmpty() + bag.extra).filterValues { it.isNotEmpty() },
-        )
+        val merged = bag.mergedWith(existing)
         val tag = Id3v2Tag.encode(merged)
 
         val head = file.readHead(4)

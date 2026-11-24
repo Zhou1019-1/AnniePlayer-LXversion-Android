@@ -62,24 +62,6 @@ data class DirectCapabilities(
 
 object AudioDirectProbe {
 
-    /**
-     * AAudio 独占出口的总开关 —— **暂时关闭**。
-     *
-     * 已查明（不是猜，是有对照物的）：
-     * 1. 独占流能开、能出声；能力面板显示我方 `pos` 正常增长（例：`written=454656f / 48000 = 9.47s`）；
-     * 2. 但 ExoPlayer 侧 `isPlaying=false`、`currentPosition=0` —— 后端推进度那段是
-     *    `if (p.isPlaying || pos != lastPositionMs)`，两个条件都不成立，所以界面永远 0；
-     * 3. 同一现象解释"播一段就停、seek 后按新位置播一下又停"：播放器始终没进 READY。
-     *
-     * 结论：缺的是**让渲染器进入就绪态的那条回调**（Media3 的音频渲染器依赖 sink 侧
-     * 通知"我已就绪/数据在流动"），不是位置算法。补齐这条之前，这个开关保持 false ——
-     * 一个会破坏播放的出口比"没有 Bit Perfect"糟得多。
-     *
-     * 下一步（已定）：读 `MediaCodecAudioRenderer.processOutputBuffer / onReady` 的就绪判定，
-     * 逐条实现它依赖的 sink 回调，再打开这个开关。
-     */
-    const val AAUDIO_SINK_ENABLED: Boolean = true
-
     /** 候选采样率：**是待验证的输入，不是结论**。设备 profile 里的率会并进来。 */
     private val CANDIDATE_RATES = intArrayOf(
         44_100, 48_000, 88_200, 96_000, 176_400, 192_000,
@@ -103,6 +85,7 @@ object AudioDirectProbe {
         Thread({
             cached = null
             _state.value = "未探测"
+            republish()
             if (controller != null) runCatching { capabilities(controller) }
             runCatching { aaudioLines = probeAaudioSync() }
             android.os.Handler(android.os.Looper.getMainLooper()).post(onDone)
@@ -131,14 +114,6 @@ object AudioDirectProbe {
      */
     private val aaudioExclusiveByRate = java.util.concurrent.ConcurrentHashMap<Int, Boolean>()
 
-    /**
-     * 探测矩阵：`采样率 → (aaudio_format_t → 能否独占)`。
-     *
-     * 比 [aaudioExclusiveByRate] 细一层：HAL 的 MMAP profile 往往只声明某些位深
-     * （本机 PLQ110 的 `mmap_no_irq_out` 只有整数、没有 float），"这个率能不能独占"
-     * 必须连着"用什么格式去要"一起回答。`AaudioSink` 用它做**前置判定**，
-     * 避免明知不行还每首歌试一次。
-     */
     private val aaudioProbeMatrix =
         java.util.concurrent.ConcurrentHashMap<Int, Map<Int, Boolean>>()
 
@@ -205,6 +180,7 @@ object AudioDirectProbe {
         if (rate > 0) {
             runtimeFailedRates.add(rate)
             aaudioExclusiveByRate[rate] = false
+            republish()
         }
         recordAaudioActive(false)
         val why = denial.label + if (detail.isEmpty()) "" else "（$detail）"
@@ -267,37 +243,60 @@ object AudioDirectProbe {
         probedExclusive = probedExclusive(rate, pcmFormat),
     )
 
-    /** 该采样率能否拿到独占；`null` = 还没探到（调用方按"不能"处理，不猜） */
-    fun aaudioExclusiveAt(rate: Int): Boolean? {
-        // A/B 定责期间总开关为 false：让**决策**也一并回到系统通路，
-        // 否则会测出"不重采样 + 系统 sink"这种混合配置，结论不可信。
-        if (!AAUDIO_SINK_ENABLED) return null
-        return if (rate <= 0) null else aaudioExclusiveByRate[rate]
+    fun aaudioExclusiveAt(rate: Int): Boolean? = published.aaudioExclusiveAt(rate)
+
+    @Volatile
+    private var deviceEncodings: List<Int> = emptyList()
+
+    fun recordDeviceEncodings(encodings: List<Int>) {
+        deviceEncodings = encodings.toList()
+        republish()
     }
 
+    fun deviceDeclaresEncoding(encoding: Int): Boolean? = published.declares(encoding)
+
+    fun exclusiveNativeDepth(): Int = published.exclusiveNativeDepth
+
+    @Volatile
+    private var published: DeviceCapabilities = DeviceCapabilities()
+
+    private fun republish() {
+        published = DeviceCapabilities(
+            declaredEncodings = deviceEncodings,
+            aaudioExclusiveByRate = aaudioExclusiveByRate.toMap(),
+            aaudioMatrix = aaudioProbeMatrix.toMap(),
+            exclusiveNativeDepth = DeviceCapabilities.depthFrom(deviceEncodings),
+            sinkDepth = probedSinkDepth,
+            sinkIsFloat = probedSinkFloat,
+            mixerDepth = mixerDepth,
+            mixerIsFloat = mixerFloat,
+            supportedDepths = supportedDepthsCache,
+            usbStreamLine = usbStreamLine,
+            system = cached,
+        )
+    }
+
+    fun capabilities(): DeviceCapabilities = published
+
     /** 探这几档够用：流媒体 44.1/48，高解析 88.2/96，极端 192 */
-    private val AAUDIO_PROBE_RATES = intArrayOf(44_100, 48_000, 88_200, 96_000, 192_000)
+    private val mmapCandidatesCache = java.util.concurrent.atomic.AtomicReference<List<MmapProfile>?>(null)
 
-    /**
-     * 探测的 PCM 格式（`aaudio_format_t`）。**整数在前**：HAL 的 MMAP profile
-     * 更常声明整数位深，float 单独一列作对照（它能区分"格式不支持"和"独占不支持"）。
-     */
-    private val AAUDIO_PROBE_FORMATS = intArrayOf(
-        com.annieplayer.annie_music.kt.core.audio.dsp.NativeAaudio.FORMAT_I24,
-        com.annieplayer.annie_music.kt.core.audio.dsp.NativeAaudio.FORMAT_I16,
-        com.annieplayer.annie_music.kt.core.audio.dsp.NativeAaudio.FORMAT_I32,
-        com.annieplayer.annie_music.kt.core.audio.dsp.NativeAaudio.FORMAT_FLOAT,
-    )
-
-    private const val CELL_EXCLUSIVE = "独占"
-    private const val CELL_SHARED = "共享"
-
-    /** 后台跑一遍 AAudio 独占探测，完成后回主线程（能力面板打开时调用） */
-    fun probeAaudioAsync(onDone: () -> Unit) {
-        Thread({
-            runCatching { aaudioLines = probeAaudioSync() }
-            android.os.Handler(android.os.Looper.getMainLooper()).post(onDone)
-        }, "annie-aaudio").start()
+    private fun mmapCandidates(): List<MmapProfile> {
+        mmapCandidatesCache.get()?.let { return it }
+        val fromPolicy = runCatching { mmapProfilesFromPolicy() }.getOrDefault(emptyList())
+        val resolved = if (fromPolicy.isNotEmpty()) {
+            fromPolicy
+        } else {
+            val native = published.system?.nativeRate ?: 0
+            listOf(
+                MmapProfile(
+                    sampleRate = if (native > 0) native else 48_000,
+                    format = com.annieplayer.annie_music.kt.core.audio.dsp.NativeOboeStream.FORMAT_I16,
+                ),
+            )
+        }
+        mmapCandidatesCache.set(resolved)
+        return resolved
     }
 
     /**
@@ -316,12 +315,7 @@ object AudioDirectProbe {
      * 不回调的话，插上耳机的**第一首**永远赶不上独占）。
      */
     fun warmUpAaudioAsync(onDone: () -> Unit = {}) {
-        // 「独占内核」是**进程级一次**的结论（库能不能加载不会中途变），
-        // 放在预热里做：启动 1~2 秒后运行日志里就有一行"独占内核：OBOE/RAW"，
-        // 不必等用户播一首歌才知道后端有没有真的起来。
         auditAaudioBackend()
-        // 一次就够：每次定计划都重探会让 AAudio 反复开关流，既抢设备又刷日志。
-        // 路由/设备变化时由 `invalidate()` 复位。
         if (aaudioWarmed) {
             android.os.Handler(android.os.Looper.getMainLooper()).post(onDone)
             return
@@ -337,28 +331,16 @@ object AudioDirectProbe {
     @Volatile
     private var aaudioBackendAudited = false
 
-    /**
-     * 把"这一进程的独占内核到底起没起来"记进运行日志。
-     *
-     * 为什么值得一行日志：独占内核只剩 Oboe 一种，但**库加载失败是静默的**
-     * （`System.loadLibrary` 的异常被 `runCatching` 收敛成 false）——
-     * 没有这一行时，"界面说 OBOE、其实全程走系统通路"这种错位只能靠读代码猜。
-     * 面板上有同一结论（`aaudioRows()` 的「独占内核」那行）。
-     */
     private fun auditAaudioBackend() {
         if (aaudioBackendAudited) return
         aaudioBackendAudited = true
-        // 独占内核只剩 Oboe 一种，但"库能不能加载"仍然必须留痕：
-        // `libannieoboe.so` 依赖 `libc++_shared.so`，任一缺失都会让**整首歌**退回系统通路
-        // （`AaudioSink.configure` 里 open 返回 0 → 直接选系统引擎）。没有这一行，
-        // "怎么一点独占都没有"就只能靠猜。
         val loaded = com.annieplayer.annie_music.kt.core.audio.dsp.NativeOboeStream.available()
         RuntimeLog.record(
             "AAudio",
             if (loaded) {
-                "独占内核：OBOE（回调拉模式，库已加载）"
+                "独占内核：Oboe（库已加载）"
             } else {
-                "独占内核：OBOE 库加载失败 —— 全程走系统通路"
+                "独占内核：Oboe 库加载失败 —— 全程走系统通路"
             },
         )
     }
@@ -366,124 +348,49 @@ object AudioDirectProbe {
     @Volatile
     private var aaudioWarmed = false
 
-    /**
-     * 独占探测：**每个采样率 × 每种 PCM 格式**各开一条流，回读真实共享模式。
-     *
-     * ## 为什么要按格式分格，而不是只测一种
-     *
-     * 以前只用 `32` 去探，而 32 在 AAudio 里被当成 **float**。这台 PLQ110 的
-     * `mmap_no_irq_out`（`DIRECT|MMAP_NOIRQ`）profile 里只有整数位深
-     * （16 / 8_24 / 24_PACKED / 32），**没有 float** —— 于是五行全报"仅共享"，
-     * 看起来像设备不支持独占，实际上是**我们问错了格式**。假阴性比没探测更糟：
-     * 它会让人放弃一条本来可行的路。
-     *
-     * 而 HAL 的 MMAP profile 是厂商写的 XML，各家不同（有的只给 float，有的只给整数），
-     * 所以只能实测，不能按"这台机器如何"推广。
-     *
-     * ## 短路
-     *
-     * 一个采样率上只要有一种格式拿到独占，该率就算"独占可用"（[aaudioExclusiveByRate]），
-     * 但**四种格式仍然都测**：面板要能回答"该请求哪种格式"，只报成功的那一个
-     * 等于把"哪种不行"也藏起来了。
-     */
     private fun probeAaudioSync(): List<Pair<String, String>> {
-        val nativeAaudio = com.annieplayer.annie_music.kt.core.audio.dsp.NativeAaudio
-        if (!nativeAaudio.isAvailable()) {
+        val oboe = com.annieplayer.annie_music.kt.core.audio.dsp.NativeOboeStream
+        if (!oboe.available()) {
             aaudioExclusiveByRate.clear()
-            return listOf("AAudio 独占" to "不可用（libaaudio 未加载）")
+            aaudioProbeMatrix.clear()
+            republish()
+            return listOf("AAudio 独占" to "不可用（libannieoboe 未加载）")
         }
-        val lines = AAUDIO_PROBE_RATES.map { rate ->
-            val cells = AAUDIO_PROBE_FORMATS.map { format ->
-                val raw = nativeAaudio.probe(rate, format)
-                val parsed = parseAaudioProbe(raw)
-                aaudioFormatTag(format) to probeCellLabel(parsed)
+        val candidates = mmapCandidates()
+        val detail = candidates.map { it.sampleRate }.distinct().joinToString("；") { rate ->
+            val byFormat = LinkedHashMap<Int, Boolean>()
+            for (candidate in candidates.filter { it.sampleRate == rate }) {
+                val format = candidate.format
+                val ok = parseAaudioProbe(oboe.probeExclusive(rate, format))
+                    ?.bitExactFor(format) == true
+                byFormat[format] = ok
+                aaudioProbeMatrix[rate] = byFormat.toMap()
+                aaudioExclusiveByRate[rate] = byFormat.values.any { it }
             }
-            // 两种汇总，两种用途：
-            // · 这一行的显示值 = 任一格式成功即算"该率可用"（`aaudioExclusiveByRate`，给定计划用）
-            // · 探测矩阵 = 按格式精确记录，给 `AaudioSink` 的前置判定用
-            val byFormat = AAUDIO_PROBE_FORMATS.mapIndexed { index, format ->
-                format to (cells[index].second == CELL_EXCLUSIVE)
-            }.toMap()
-            aaudioProbeMatrix[rate] = byFormat
-            aaudioExclusiveByRate[rate] = byFormat.values.any { it }
-            ("AAudio 独占 ${fmtRate(rate)}" to
-                cells.joinToString(" · ") { (tag, label) -> "$tag=$label" })
+            byFormat.entries.joinToString("·") { (format, ok) ->
+                "${formatTag(format)}=${if (ok) "独占" else "共享"}"
+            }.let { "${fmtRate(rate)} $it" }
         }
-        RuntimeLog.record(
-            "AAudio",
-            lines.joinToString("；") { "${it.first} = ${it.second}" },
-        )
-        return lines + oboeSharingProbeLines()
+        RuntimeLog.record("AAudio", "独占探测（Oboe 内核）：$detail")
+        republish()
+        return listOf("AAudio 独占" to summaryOf())
     }
 
-    /** 面板里格式那一列的名字：`16` / `24` / `32i`（整数）/ `f`（浮点） */
-    private fun aaudioFormatTag(format: Int): String = when (format) {
-        com.annieplayer.annie_music.kt.core.audio.dsp.NativeAaudio.FORMAT_I16 -> "16"
-        com.annieplayer.annie_music.kt.core.audio.dsp.NativeAaudio.FORMAT_I24 -> "24"
-        com.annieplayer.annie_music.kt.core.audio.dsp.NativeAaudio.FORMAT_I32 -> "32i"
+    private fun summaryOf(): String = exclusiveSummaryText(
+        mmapCandidates().map { it.sampleRate }.distinct().map { it to aaudioExclusiveByRate[it] },
+    )
+
+    private fun formatTag(format: Int): String = when (format) {
+        com.annieplayer.annie_music.kt.core.audio.dsp.NativeOboeStream.FORMAT_I16 -> "16"
+        com.annieplayer.annie_music.kt.core.audio.dsp.NativeOboeStream.FORMAT_I24 -> "24"
         else -> "f"
     }
 
-    /** 单元格文案：越短越好（一行要塞四格） */
-    private fun probeCellLabel(result: AaudioProbeResult?): String = when {
-        result == null -> "?"
-        result.errorTag != null -> "err${result.errorTag}"
-        result.exclusive -> CELL_EXCLUSIVE
-        else -> CELL_SHARED
-    }
-
-    /**
-     * Oboe 后端能不能拿到 EXCLUSIVE —— 参数组合实测。
-     *
-     * 起因是一组实测矛盾：这台机器上 **RAW 曾被判成独占，OBOE 拿不到**。追下去发现
-     * RAW 那个"独占"是假的（`AAUDIO_SHARING_MODE_EXCLUSIVE` 被写成 1，请求与判定
-     * 用同一个错值互相抵消），真实情况是两个后端都拿不到。于是这里把"到底哪些变量
-     * 影响 HAL 给不给"逐个测出来：
-     *
-     * ```
-     * [0] 低延迟 + callback + capacity   ← 播放路径当时用的组合
-     * [1] 低延迟 + 推 + capacity
-     * [2] 低延迟 + 推 + 不设 capacity
-     * [3] NONE + 推 + 不设 capacity      ← 关键假设：MIUI 剥的是 ULL 路由标志
-     * [4] NONE + callback + 不设 capacity
-     * ```
-     *
-     * 第 3/4 组是本轮的重点：MIUI 那条 `forbiding ull track route` 剥的是 **ULL**
-     * （超低延迟）路由上的 `RAW` / `MMAP_NOIRQ` 标志，而 `LOW_LATENCY` 正是 ULL 的触发器。
-     * 音乐播放不需要低延迟，只需要"不转换" —— 如果 NONE 能绕过剥离，这一级就成立。
-     *
-     * 返回值里还编进了"实际后端"（+10 = OpenSL ES），用来排除
-     * "Oboe 悄悄走了 OpenSL，所以必然共享"这种误判。
-     *
-     * 只 open 不 start，不出声。结论同时进运行日志和「输出能力（实测）」面板。
-     */
-    private fun oboeSharingProbeLines(): List<Pair<String, String>> {
-        // 独占内核现在只有 Oboe 一种，探测无条件跑。48 kHz 是最通用的档：
-        // HAL 对它的独占支持通常最完整，测出来的差异最能说明问题。
-        val probe = com.annieplayer.annie_music.kt.core.audio.dsp.NativeOboeStream
-            .probeSharingMode(48_000, 32, 2) ?: return listOf("Oboe 独占探测" to "未执行（库不可用）")
-        fun label(v: Int): String = when {
-            v == 11 -> "OpenSL独占"
-            v == 10 -> "OpenSL共享"
-            v == 1 -> "独占"
-            v == 0 -> "共享"
-            else -> "失败(${v + 100})"
-        }
-        fun at(index: Int): Int = probe.getOrElse(index) { 0 }
-        val lowLatency = "callback+cap=${label(at(0))} · 推+cap=${label(at(1))} · " +
-            "推默认=${label(at(2))}"
-        val none = "推=${label(at(3))} · callback=${label(at(4))}"
-        RuntimeLog.record("AAudio", "Oboe 独占探测（48 kHz，低延迟）：$lowLatency")
-        RuntimeLog.record("AAudio", "Oboe 独占探测（48 kHz，NONE）：$none")
-        return listOf(
-            "Oboe 探测·低延迟" to lowLatency,
-            "Oboe 探测·NONE" to none,
-        )
-    }
 
     /** 设备/路由变化时调用，下次重新探测（单点实测结果保留：offload 能力取决于 HAL，不随路由变） */
     fun invalidate() {
         cached = null
+        mmapCandidatesCache.set(null)
         // 路由/设备变了，AAudio 独占能力要重新实测。
         // **矩阵与运行时黑名单一起清**：MMAP profile 是按设备类型分别声明的 ——
         // 内置扬声器拿不到不代表插上 USB DAC 也拿不到；留着旧结论会把新路由永久拦在门外。
@@ -491,10 +398,11 @@ object AudioDirectProbe {
         aaudioProbeMatrix.clear()
         runtimeFailedRates.clear()
         aaudioExclusiveByRate.clear()
+        republish()
     }
 
     /** 只读缓存快照：**不触发探测**（供播放路径/UI 用，避免在那里建轨） */
-    fun cachedOrNull(): DirectCapabilities? = cached
+    fun cachedOrNull(): DirectCapabilities? = published.system
 
     /**
      * 探测状态：`未探测` / `探测中…` / `完成` / `失败：…`。
@@ -529,11 +437,11 @@ object AudioDirectProbe {
      * 而两者在听感上一模一样。这台 ROM 会丢应用日志，这一行是唯一的现场。
      */
     @Volatile
-    var usbStreamLine: String = ""
-        private set
+    private var usbStreamLine: String = ""
 
     fun recordUsbStream(line: String) {
         usbStreamLine = line
+        republish()
     }
 
     /** 系统 mixer 的位深（16 / 24 / 32）与是否 float，由播放层在探测时写入 */
@@ -546,6 +454,7 @@ object AudioDirectProbe {
     fun recordMixerDepth(depth: Int, isFloat: Boolean) {
         mixerDepth = depth
         mixerFloat = isFloat
+        republish()
     }
 
     /**
@@ -558,7 +467,7 @@ object AudioDirectProbe {
      * 会让用户在无损曲目上白白损失 8 位 —— 所以这里以**真建一次 track 的实测结果**为准，
      * `AudioCapabilities` 只当兜底。
      */
-    fun sinkDepth(): Int = probedSinkDepth
+    fun sinkDepth(): Int = published.sinkDepth
 
     /**
      * [sinkDepth] 那一次实测里，32 是不是 **float**（而不是 32 位整数）。
@@ -567,7 +476,7 @@ object AudioDirectProbe {
      * 而本机 `AudioCapabilities` 只报 `PCM_16` → 显示成 `24→32 Bit`（整数），
      * 实际交付的却是 float 轨。同一事实两个来源，必然打架。
      */
-    fun sinkFloat(): Boolean = probedSinkFloat
+    fun sinkFloat(): Boolean = published.sinkIsFloat
 
     /**
      * 保证「sink 位深」已经实测过，返回它；0 = 连 16 bit 都建不出来（异常情况）。
@@ -627,11 +536,13 @@ object AudioDirectProbe {
             if (ok) {
                 probedSinkDepth = if (isFloat) 32 else if (encoding == AudioFormat.ENCODING_PCM_24BIT_PACKED) 24 else 16
                 probedSinkFloat = isFloat
+                republish()
                 return
             }
         }
         probedSinkDepth = 0
         probedSinkFloat = false
+        republish()
     }
 
     /** 设备支持的输出位深选项（含 0 = 跟随源）；空 = 还没探测到 */
@@ -640,19 +551,23 @@ object AudioDirectProbe {
 
     fun recordSupportedDepths(depths: List<Int>) {
         supportedDepthsCache = depths
+        republish()
     }
 
-    fun supportedDepths(): List<Int> = supportedDepthsCache
+    fun supportedDepths(): List<Int> = published.supportedDepths
 
-    /** 给界面用的位深文案；拿不到就返回空串（不猜、不编） */
-    fun mixerDepthLabel(): String =
-        if (mixerFloat) depthText(32, float = true) else depthText(mixerDepth)
+    fun mixerDepthLabel(): String = if (published.mixerIsFloat) {
+        depthText(32, float = true)
+    } else {
+        depthText(published.mixerDepth)
+    }
 
     /**
      * 诊断报告：**逐条列出**，供设置页弹框展示。
      */
     fun report(): List<Pair<String, String>> {
-        val caps = cachedOrNull() ?: return buildList {
+        val snapshot = published
+        val caps = snapshot.system ?: return buildList {
             add("探测状态" to state.value)
             add("最近播放失败" to lastPlaybackFailure)
             // 无缓存时不能只回一行 —— 蓝牙启动后切回本机、或刚换过设备时，
@@ -683,8 +598,8 @@ object AudioDirectProbe {
                 },
             )
             add("当前输出设备" to caps.deviceLabel.ifEmpty { "未知" })
-            if (usbStreamLine.isNotEmpty()) {
-                add("USB 流参数" to usbStreamLine)
+            if (snapshot.usbStreamLine.isNotEmpty()) {
+                add("USB 流参数" to snapshot.usbStreamLine)
             }
             add("设备声明采样率" to caps.deviceRates.joinToString(" / ") { fmtRate(it) }.ifEmpty { "无" })
             // 第 ② 层：真建轨。三态分开写，别让用户把"没探"读成"不支持"。
@@ -718,21 +633,17 @@ object AudioDirectProbe {
         }
     }
 
-    /** AAudio 那几行；还没探过就明说"未探测"，不占位假数据 */
     private fun aaudioRows(): List<Pair<String, String>> =
         aaudioLines.ifEmpty {
-            listOf("AAudio 独占" to "未探测（打开本面板时自动探测）")
+            listOf("AAudio 独占" to "未探测（起播后自动探测）")
         } + listOf(
-            // 内核只剩一种了，但"实际走的是 AAudio 还是 OpenSL"要看运行日志那条
-            // 「独占流已开：… Oboe（AAudio/OpenSL ES）」，这里只说明用的是哪套封装。
-            "独占内核" to "OBOE（回调拉模式）",
-            "AAudio 播放状态" to aaudioStats,
+            "独占内核" to "Oboe（AAudio 独占，libannieoboe）",
             "AAudio 独占生效" to if (aaudioActiveNow) {
                 "是（绕开 mixer）"
             } else {
-                // 带上原因：分不清"本来不该独占"和"想独占但拿不到"，这一行等于没说
                 "否 · " + (lastExclusiveDenial ?: "本次还没尝试")
             },
+            "AAudio 播放状态" to aaudioStats,
         )
 
     /** 取不到就是 0 —— 不写"未知"以外的东西，更不猜一个默认档 */
@@ -760,6 +671,7 @@ object AudioDirectProbe {
         }
         cached = result
         _state.value = "完成"
+        republish()
         RuntimeLog.record(
             "输出探测",
             "完成：PCM 可建 ${result.pcmRates.size} 档 / 实测建轨 ${result.sinkRates.size} 档",

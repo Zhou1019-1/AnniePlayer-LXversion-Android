@@ -21,7 +21,6 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
-import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -47,6 +46,8 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.annieplayer.annie_music.kt.data.local.LocalLibraryStore
 import com.annieplayer.annie_music.kt.data.local.LocalTrackMeta
+import androidx.compose.ui.res.painterResource
+import com.annieplayer.annie_music.kt.R
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppDuration
 import com.annieplayer.annie_music.kt.ui.theme.AppEasing
@@ -60,11 +61,14 @@ import com.annieplayer.annie_music.kt.ui.theme.ColorPalette
 import com.annieplayer.annie_music.kt.ui.theme.LocalAmbientCoverUrl
 import com.annieplayer.annie_music.kt.ui.theme.LocalCoverThemePalette
 import com.annieplayer.annie_music.kt.widgets.CoverPaletteBackdrop
+import com.annieplayer.annie_music.kt.widgets.DetailTopBar
 import com.annieplayer.annie_music.kt.widgets.SelectCheckBox
 import com.annieplayer.annie_music.kt.widgets.MusicNoteGlyph
-import com.annieplayer.annie_music.kt.widgets.SongMoreButton
+import com.annieplayer.annie_music.kt.widgets.SongRowActions
+import com.annieplayer.annie_music.kt.widgets.SongRowCoverArt
 import com.annieplayer.annie_music.kt.widgets.clickableNoRipple
 import com.annieplayer.annie_music.kt.widgets.clickableRipple
+import com.annieplayer.annie_music.kt.widgets.combinedClickableRipple
 import com.annieplayer.annie_music.kt.widgets.playingRowBackground
 import kotlinx.coroutines.launch
 
@@ -72,7 +76,7 @@ import kotlinx.coroutines.launch
  * 本地曲库各页共用的零件。
  *
  * 尺寸/层级全部**照流媒体详情页**取值，保证两边看起来是同一套东西：
- * - [LocalDetailTopBar] ← `SingerDetailHeader` / `AlbumDetailHeader`
+ * - [LocalDetailTopBar] ← 走 `DetailTopBar`（与歌单 / 专辑 / 歌手详情同一份骨架）
  *   （`start/end 12`、**`top 40`**、`bottom 4`；chevron 22dp + 标题 17sp SemiBold + 数量 13sp）
  * - [LocalSongRow] ← `AlbumDetailSongRow` / `SingerDetailSongRow`
  *   （行高 [AppSize.detailRowHeight]、序号列 28dp、封面 40dp 圆角 r6、标题 16sp Medium、副标题 13sp）
@@ -175,108 +179,83 @@ internal fun LocalDetailTopBar(
     actionSecondary: String? = null,
     onActionSecondary: (() -> Unit)? = null,
     /**
+     * [action] 是否可点。false 时文字压到 25% 白、且不挂点击 —— 用于「没有改动可保存」
+     * 这种状态：把按钮藏起来会让顶栏布局跳动，只灰掉则一眼能看出「现在没东西可存」。
+     */
+    actionEnabled: Boolean = true,
+    /**
      * 右侧的「+」图标动作（播放列表页 / 自建歌单详情页用）。
      *
      * 与文字 [action] 是同一个位置，两者都给时**图标优先** —— 一页里不会同时需要
      * 「文字动作」和「加号」。
      */
     onAdd: (() -> Unit)? = null,
+    /**
+     * 右侧的**图标动作区**（编辑页的「搜索 / 保存」）。画在文字动作与「+」之后，
+     * 由调用方自己决定几个、多大 —— 顶栏只负责把它们贴到右边缘。
+     */
+    trailing: (@Composable () -> Unit)? = null,
+    /**
+     * 右侧动作的强调色。默认主色（详情页的常规用法）；「编辑元数据 / 搜索元数据 / 导入元数据」
+     * 三页要求整体黑白，所以由它们显式传白色，避免为了三页去改所有详情页。
+     */
+    accent: Color = AppColors.primary,
 ) {
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(
-                start = AppSpacing.sp12,
-                end = AppSpacing.sp12,
-                top = AppSpacing.sp40,
-                bottom = AppSpacing.sp4,
-            ),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Box(
-            modifier = Modifier
-                .clickableRipple(onClose)
-                .padding(AppSpacing.sp4),
-            contentAlignment = Alignment.Center,
-        ) {
-            LocalChevronLeft(modifier = Modifier.size(AppIconSize.icon22), tint = AppColors.textSecondary)
-        }
-        Spacer(modifier = Modifier.width(AppSpacing.sp8))
-        // 「标题 + 计数」包成一组占满剩余宽度：
-        // 直接给标题 `weight(fill = false)` 会让**未使用的份额留在原地**（Compose 不会重分配），
-        // 于是右侧动作浮在半空 —— 截图里「+」停在屏宽 78% 处就是这个原因。
-        // 现在外层 Row 吃满剩余，内层标题按内容宽度、计数紧跟在它后面，多余空白全留在组尾。
-        Row(
-            modifier = Modifier.weight(1f),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text(
-                text = title,
-                modifier = Modifier.weight(1f, fill = false),
-                color = AppColors.textPrimary,
-                fontSize = AppFontSize.size17,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            if (!count.isNullOrEmpty()) {
-                Spacer(modifier = Modifier.width(AppSpacing.sp6))
-                Text(
-                    text = count,
-                    color = AppColors.whiteA40,
-                    fontSize = AppFontSize.size13,
-                    fontWeight = FontWeight.Medium,
-                    maxLines = 1,
-                )
+    DetailTopBar(
+        onClose = onClose,
+        modifier = modifier,
+        title = title,
+        count = count,
+        topInset = false,
+        endPadding = AppSpacing.sp12,
+        blockTouches = false,
+        actions = {
+            if (actionSecondary != null && onActionSecondary != null) {
+                Box(
+                    modifier = Modifier
+                        .clickableRipple(onActionSecondary)
+                        .padding(AppSpacing.sp4),
+                ) {
+                    Text(
+                        text = actionSecondary,
+                        color = accent,
+                        fontSize = AppFontSize.size13,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
+                Spacer(modifier = Modifier.width(AppSpacing.sp8))
             }
-        }
-        if (actionSecondary != null && onActionSecondary != null) {
-            Box(
-                modifier = Modifier
-                    .clickableRipple(onActionSecondary)
-                    .padding(AppSpacing.sp4),
-            ) {
-                Text(
-                    text = actionSecondary,
-                    color = AppColors.primary,
-                    fontSize = AppFontSize.size13,
-                    fontWeight = FontWeight.Medium,
-                )
+            if (action != null && onAction != null) {
+                Box(
+                    modifier = (if (actionEnabled) Modifier.clickableRipple(onAction) else Modifier)
+                        .padding(AppSpacing.sp4),
+                ) {
+                    Text(
+                        text = action,
+                        color = if (actionEnabled) accent else AppColors.whiteA25,
+                        fontSize = AppFontSize.size13,
+                        fontWeight = FontWeight.Medium,
+                    )
+                }
             }
-            Spacer(modifier = Modifier.width(AppSpacing.sp8))
-        }
-        if (action != null && onAction != null) {
-            Box(
-                modifier = Modifier
-                    .clickableRipple(onAction)
-                    .padding(AppSpacing.sp4),
-            ) {
-                Text(
-                    text = action,
-                    color = AppColors.primary,
-                    fontSize = AppFontSize.size13,
-                    fontWeight = FontWeight.Medium,
-                )
+            if (onAdd != null) {
+                Box(
+                    modifier = Modifier
+                        .clickableNoRipple(onAdd)
+                        .padding(AppSpacing.sp4),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_action_add),
+                        contentDescription = "新建",
+                        tint = AppColors.white,
+                        modifier = Modifier.size(AppIconSize.icon24),
+                    )
+                }
             }
-        }
-        if (onAdd != null) {
-            // 与 Qobuz Token 管理页那一枚「+」同款（主色 / 24dp / 无波纹），位置也照它：
-            // 右侧只留 Row 的 sp12 + 自身 sp4 = 16dp —— 正好和下面搜索框的右边缘同一条竖线。
-            Box(
-                modifier = Modifier
-                    .clickableNoRipple(onAdd)
-                    .padding(AppSpacing.sp4),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    imageVector = Icons.Default.Add,
-                    contentDescription = "新建",
-                    tint = AppColors.primary,
-                    modifier = Modifier.size(AppIconSize.icon24),
-                )
-            }
-        }
-    }
+            trailing?.invoke()
+        },
+    )
 }
 
 /** 排序模式：按名字 / 按目录名（字母序） */
@@ -413,27 +392,24 @@ internal fun LocalSectionHeader(title: String, onSeeAll: (() -> Unit)? = null) {
             ),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            text = title,
-            modifier = Modifier.weight(1f),
-            color = AppColors.textPrimary,
-            fontSize = AppFontSize.size20,
-            fontWeight = FontWeight.Bold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (onSeeAll != null) {
-            Row(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(percent = 50))
-                    .background(AppColors.whiteA06)
-                    .clickableRipple(onSeeAll)
-                    .padding(horizontal = AppSpacing.sp12, vertical = AppSpacing.sp6),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(text = "全部", color = AppColors.white70, fontSize = AppFontSize.xs)
-                Spacer(modifier = Modifier.width(AppSpacing.sp2))
-                LocalChevronRight(modifier = Modifier.size(AppIconSize.icon13), tint = AppColors.glyphStrong)
+        Row(
+            modifier = Modifier
+                .weight(1f, fill = false)
+                .then(if (onSeeAll != null) Modifier.clickableRipple(onSeeAll) else Modifier),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text(
+                text = title,
+                modifier = Modifier.weight(1f, fill = false),
+                color = AppColors.textPrimary,
+                fontSize = AppFontSize.size20,
+                fontWeight = FontWeight.Bold,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            if (onSeeAll != null) {
+                Spacer(modifier = Modifier.width(AppSpacing.sp6))
+                LocalChevronRight(modifier = Modifier.size(AppIconSize.icon16), tint = AppColors.whiteA50)
             }
         }
     }
@@ -505,10 +481,23 @@ internal fun LocalSongRow(
     selectionMode: Boolean = false,
     selected: Boolean = false,
     onToggleSelect: (() -> Unit)? = null,
+    onLongPress: (() -> Unit)? = null,
 ) {
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .then(
+                when {
+                    isActive -> {
+                        // 竖条贴行左边界（内缩 2dp），与封面之间留出 10dp 空隙
+                        Modifier.playingRowBackground(tint = playingTint, startInset = 2.dp)
+                    }
+                    // 多选选中态：与专辑详情同一档（primary 8%）。
+                    // 画在**整行**上（含行尾 ♥ · ⋮ / 勾选框）：画在内层内容盒上时行尾不在高亮范围内
+                    selected -> Modifier.background(AppColors.primaryA08)
+                    else -> Modifier
+                },
+            )
             .padding(end = trailingSpace),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -516,18 +505,10 @@ internal fun LocalSongRow(
             modifier = Modifier
                 .weight(1f)
                 .height(AppSize.detailRowHeight)
-                .then(
-                    when {
-                        isActive -> {
-                            // 竖条贴行左边界（内缩 2dp），与封面之间留出 10dp 空隙
-                            Modifier.playingRowBackground(tint = playingTint, startInset = 2.dp)
-                        }
-                        // 多选选中态：与专辑详情同一档（primary 8%）
-                        selected -> Modifier.background(AppColors.primaryA08)
-                        else -> Modifier
-                    },
+                .combinedClickableRipple(
+                    onClick = { if (selectionMode) onToggleSelect?.invoke() else onPlay() },
+                    onLongClick = onLongPress,
                 )
-                .clickableRipple { if (selectionMode) onToggleSelect?.invoke() else onPlay() }
                 .padding(
                     start = leadingSpace,
                     end = AppSpacing.sp12,
@@ -558,29 +539,11 @@ internal fun LocalSongRow(
                 Spacer(modifier = Modifier.width(if (showCover) AppSpacing.sp8 else AppSpacing.sp10))
             }
             if (showCover) {
-                // 封面 40dp / 圆角 6（与歌手详情行一致）
+                // 封面与全站歌曲行同一张（SongRowCoverArt：44dp / 圆角 r6 / 失败退音符）
                 Box(contentAlignment = Alignment.Center) {
-                    Box(
-                        modifier = Modifier
-                            .size(AppSpacing.sp40)
-                            .clip(RoundedCornerShape(AppRadius.r6))
-                            .background(AppColors.whiteA03),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (meta.coverPath != null) {
-                            AsyncImage(
-                                model = "file://${meta.coverPath}",
-                                contentDescription = null,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        } else {
-                            MusicNoteGlyph(
-                                modifier = Modifier.size(AppIconSize.icon16),
-                                tint = AppColors.whiteA15,
-                            )
-                        }
-                    }
+                    SongRowCoverArt(
+                        coverUrl = meta.coverPath?.let { "file://$it" }.orEmpty(),
+                    )
                     if (isActive && !showIndex) {
                         // 序号列不显示时，等化器叠在封面中心（46% 黑罩保证看得清）
                         Box(
@@ -623,35 +586,15 @@ internal fun LocalSongRow(
                     overflow = TextOverflow.Ellipsis,
                 )
             }
-            // 音质角标：FLAC 24bit / 320K（本地文件的"规格"，流媒体那边显示的是 Hi-Res/Dolby）
-            if (meta.qualityChip.isNotEmpty()) {
-                Spacer(modifier = Modifier.width(AppSpacing.sp4))
-                LocalQualityBadge(label = meta.qualityChip)
-            }
         }
         // 行尾槽位：多选态 = 勾选框（⋮ 不渲染 —— 多选时打开全局面板没有意义）；
-        // 常态 = ⋮（点开全局歌曲操作）
+        // 常态 = ♥ · ⋮（收藏状态由宿主经 [LocalSongLike] 注入）
         val toggle = onToggleSelect
         if (selectionMode && toggle != null) {
             SelectCheckBox(checked = selected, onToggle = toggle)
         } else {
-            // 命中区与勾选框同位同宽（48dp）：切多选时文字区不横向跳一格
-            SongMoreButton(onClick = onMore, modifier = Modifier.minimumInteractiveComponentSize())
+            SongRowActions(song = meta.toSong(), onMore = onMore)
         }
-    }
-}
-
-/** 音质角标（照 `SingerDetailQualityBadge`：primary 15% 底 + 圆角胶囊 + 10sp 主色） */
-@Composable
-internal fun LocalQualityBadge(label: String, modifier: Modifier = Modifier) {
-    Box(
-        modifier = modifier
-            .clip(RoundedCornerShape(percent = 25))
-            .background(AppColors.primaryA15)
-            .padding(horizontal = AppSpacing.sp4, vertical = 1.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(text = label, color = AppColors.primary, fontSize = AppFontSize.size10)
     }
 }
 

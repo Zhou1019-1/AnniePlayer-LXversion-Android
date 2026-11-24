@@ -125,6 +125,12 @@ private val KwHeroSectionTypes = setOf(
     KW_SECTION_SCROLL_SONGLIST_ULTRA,
 )
 
+/** 只承载「编辑精选」的 section 类型（不含 banner），用于判断服务端这次到底投没投编辑精选。 */
+internal val KwEditorSectionTypes = setOf(
+    KW_SECTION_SCROLL_SONGLIST,
+    KW_SECTION_SCROLL_SONGLIST_ULTRA,
+)
+
 /**
  * 解析主页 XML 为 section 列表。
  *

@@ -17,6 +17,12 @@ data class KuwoArtistSongs(
 data class KuwoAlbumSongs(
     val songs: List<AlbumSong>,
     val pub: String,
+    /** 唱片公司 / 版权方（albuminfo 里有就给；写标签时当 `copyright` 用） */
+    val company: String = "",
+    /** 专辑名（albuminfo 的 `name`），给「按名字去 Apple 查动态封面」当搜索词 */
+    val albumName: String = "",
+    /** 专辑艺术家（albuminfo 的 `artist`，缺失时退回 `aartist`），同上 */
+    val artistName: String = "",
 )
 
 /** 歌词结果（对齐 Dart `({String lrc, String? tlyric})`，另带逐字） */

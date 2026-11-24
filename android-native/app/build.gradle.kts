@@ -40,6 +40,10 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    androidResources {
+        localeFilters += listOf("zh")
+    }
+
     buildFeatures {
         compose = true
     }
@@ -52,6 +56,7 @@ android {
             // 后者必须优先 —— libc++ 的 ABI 在 NDK 大版本之间不保证兼容，
             // 让旧编的 libffmpegkit.so 去配新 libc++ 会在首次 ffprobe/抽封面时崩。
             pickFirsts += "**/libc++_shared.so"
+            useLegacyPackaging = true
         }
     }
 
@@ -152,6 +157,7 @@ dependencies {
     implementation("androidx.media3:media3-session:1.4.1")
     // 分片/播放列表请求走共享 OkHttp（连接池 + HTTP/2 复用），见 MediaPlayerBackend.httpFactory
     implementation("androidx.media3:media3-datasource-okhttp:1.4.1")
+    implementation("androidx.media3:media3-database:1.4.1")
     implementation("androidx.media3:media3-common:1.4.1")
 
     // ── Oboe（AAudio / OpenSL ES 统一封装）────────────────────────────────────────────

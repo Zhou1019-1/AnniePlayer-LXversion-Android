@@ -495,6 +495,23 @@ internal object FavoriteStore {
         return added
     }
 
+    /**
+     * 批量加入自建歌单（多选「加入到歌单」）：一个事务、一次缓存失效，返回真的加进去的条数。
+     *
+     * 理由同 [removeSongsFromUserPlaylist]：逐首调 [addSongToUserPlaylist] 会是 N 次写盘 +
+     * N 次 `userPlaylistsCache = null`，之后每读一次都要重解析所有歌单。
+     */
+    fun addSongsToUserPlaylist(playlistId: String, songs: List<Song>): Int {
+        if (songs.isEmpty()) return 0
+        val items = songs.map {
+            FavoriteKeys.song(it) to json.encodeToString(it.withoutLyrics())
+        }
+        var added = 0
+        write { database -> added = database.appendPlaylistSongs(playlistId, items) }
+        if (added > 0) userPlaylistsCache = null
+        return added
+    }
+
     fun removeSongFromUserPlaylist(playlistId: String, songId: String, platform: MusicPlatform) {
         write { it.removePlaylistSong(playlistId, FavoriteKeys.online(platform, songId)) }
         userPlaylistsCache = null

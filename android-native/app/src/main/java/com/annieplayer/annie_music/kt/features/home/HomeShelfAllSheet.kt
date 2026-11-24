@@ -65,7 +65,6 @@ internal fun HomeShelfAllSheet(
             Column(modifier = Modifier.fillMaxSize().systemBarsPadding()) {
                 LocalDetailTopBar(
                     title = data.title,
-                    count = "${data.items.size} 个",
                     onClose = requestClose,
                 )
                 // 固定在滚动区之外：滑动时内容不会贴到标题上
@@ -78,33 +77,16 @@ internal fun HomeShelfAllSheet(
                         start = AppSpacing.sp16,
                         end = AppSpacing.sp16,
                         top = AppSpacing.sp4,
-                        bottom = AppSpacing.sp40,
+                        bottom = AppSpacing.listBottomInset,
                     ),
                     horizontalArrangement = Arrangement.spacedBy(AppSpacing.sp12),
                     verticalArrangement = Arrangement.spacedBy(AppSpacing.sp16),
                 ) {
-                    if (data.items.size >= 3) {
-                        // 首项提成整行大卡（只有 1~2 项时没必要，直接网格更整齐）
-                        item(key = "hero", span = { GridItemSpan(maxLineSpan) }) {
-                            val hero = data.items.first()
-                            HomeShelfHeroCard(
-                                item = hero,
-                                onClick = { hero.target?.let(onOpenTarget) },
-                            )
-                        }
-                        items(data.items.drop(1), key = { it.key }) { item ->
-                            HomeShelfAllTile(
-                                item = item,
-                                onClick = { item.target?.let(onOpenTarget) },
-                            )
-                        }
-                    } else {
-                        items(data.items, key = { it.key }) { item ->
-                            HomeShelfAllTile(
-                                item = item,
-                                onClick = { item.target?.let(onOpenTarget) },
-                            )
-                        }
+                    items(data.items, key = { it.key }) { item ->
+                        HomeShelfAllTile(
+                            item = item,
+                            onClick = { item.target?.let(onOpenTarget) },
+                        )
                     }
                 }
             }

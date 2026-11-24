@@ -48,6 +48,9 @@ internal val kuwoReMusicList by lazy {
 }
 internal val kuwoRePub by lazy { Regex("\"pub\"\\s*:\\s*\"([^\"]+)\"") }
 
+/** 唱片公司 / 版权方（酷我 albuminfo 的伪 JSON 兜底）；没有就是空串 */
+internal val kuwoReCompany by lazy { Regex("\"company(?:name)?\"\\s*:\\s*\"([^\"]+)\"") }
+
 /** 解析酷我搜索系伪 JSON（单引号 -> 双引号）为顶层 Map；失败返回 null */
 internal fun kuwoParseRoot(text: String): Map<String, Any?>? {
     if (text.isBlank()) return null

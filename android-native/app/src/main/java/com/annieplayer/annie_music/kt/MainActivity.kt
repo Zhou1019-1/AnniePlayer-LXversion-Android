@@ -17,6 +17,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import com.annieplayer.annie_music.kt.core.audio.AnnieAudioHolder
@@ -147,6 +148,11 @@ class MainActivity : ComponentActivity() {
                 // → 不再走开屏，直接进主界面，避免「又重开了一遍软件」的观感。
                 val alreadyHasSong = (AnnieAudioHolder.player?.mediaItemCount ?: 0) > 0
                 var splashDone by remember { mutableStateOf(alreadyHasSong) }
+                var shellReady by remember { mutableStateOf(false) }
+                LaunchedEffect(Unit) {
+                    withFrameNanos { }
+                    shellReady = true
+                }
                 // 存储权限引导弹窗：未授予「所有文件访问」时主动弹一次（Flutter 版只在抽屉里提示）
                 var showStorageDialog by remember { mutableStateOf(false) }
                 val storageGranted = remember { isManageStorageGranted(this@MainActivity) }
@@ -157,7 +163,7 @@ class MainActivity : ComponentActivity() {
                 Box(modifier = Modifier.fillMaxSize()) {
                     AppShell()
                     if (!splashDone) {
-                        SplashScreen(onFinish = { splashDone = true })
+                        SplashScreen(ready = shellReady, onFinish = { splashDone = true })
                     }
                     StoragePermissionDialog(
                         visible = showStorageDialog,

@@ -22,8 +22,7 @@ import java.nio.ByteBuffer
  */
 internal interface OutputPort {
 
-    /** 但这条通路的名字（上报与诊断用） */
-    val path: OutputPath
+    val path: SinkKind
 
     /**
      * 写一块 PCM / 已封装的 DSD 字节。
@@ -40,6 +39,15 @@ internal interface OutputPort {
     fun pause()
 
     fun flush(playRequested: Boolean)
+
+    /**
+     * 时间轴不连续（Media3 的 `AudioSink.handleDiscontinuity`）。
+     *
+     * **与 [flush] 是两件事**：不连续只是"时间戳跳了"，已交给后端的数据还要照播完；
+     * `flush` 才是"丢掉重来"（seek / 换曲）。参考实现 `DefaultAudioSink.handleDiscontinuity`
+     * 也只置一个 `startMediaTimeUsNeedsSync` 标志，不清 `AudioTrack` 的数据。
+     */
+    fun onTimelineDiscontinuity()
 
     fun reset()
 

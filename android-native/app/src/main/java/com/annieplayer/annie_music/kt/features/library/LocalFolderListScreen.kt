@@ -20,12 +20,14 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.annieplayer.annie_music.kt.data.local.LocalGroupSets
 import com.annieplayer.annie_music.kt.data.local.LocalLibraryStore
 import com.annieplayer.annie_music.kt.data.local.LocalSection
 import com.annieplayer.annie_music.kt.data.local.LocalTrackMeta
@@ -38,10 +40,14 @@ import com.annieplayer.annie_music.kt.ui.theme.AppIconSize
 import com.annieplayer.annie_music.kt.ui.theme.AppRadius
 import com.annieplayer.annie_music.kt.ui.theme.AppSpacing
 import com.annieplayer.annie_music.kt.ui.theme.ColorPalette
+import com.annieplayer.annie_music.kt.ui.theme.LocalCoverThemePalette
 import com.annieplayer.annie_music.kt.widgets.CoverPaletteBackdrop
 import com.annieplayer.annie_music.kt.widgets.DetailPlayAllPill
+import com.annieplayer.annie_music.kt.widgets.ResumePlayingPill
 import com.annieplayer.annie_music.kt.widgets.clickableRipple
+import com.annieplayer.annie_music.kt.widgets.rememberPlayingRowVisible
 import com.annieplayer.annie_music.kt.widgets.shortScrollbar
+import kotlinx.coroutines.launch
 
 /**
  * **文件夹列表页**（点宫格「文件夹」弹出）。
@@ -53,12 +59,20 @@ import com.annieplayer.annie_music.kt.widgets.shortScrollbar
 @Composable
 fun LocalFolderListScreen(
     tracks: List<LocalTrackMeta>,
+    groupsAll: LocalGroupSets,
     isTop: Boolean,
     onClose: () -> Unit,
     onOpenFolder: (String) -> Unit,
+    onRequestCover: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val groups = remember(tracks) { groupTracks(tracks, LocalSection.folders) }
+    val groups = remember(groupsAll, tracks.size) {
+        if (groupsAll.matches(tracks.size)) {
+            groupsAll.of(LocalSection.folders)
+        } else {
+            groupTracks(tracks, LocalSection.folders)
+        }
+    }
     // 排序：目录名（默认，字母序）/ 歌曲数；模式与升降序都持久化（退出再回来不重置）
     val pref = rememberSortPreference(
         page = LocalLibraryStore.PAGE_FOLDERS,
@@ -81,6 +95,19 @@ fun LocalFolderListScreen(
         }
     }
     val listState = rememberLazyListState()
+
+    // 组内前几首「还没抽过封面」的歌：卡片滚到可见时才请求，见 RequestVisibleCovers
+    val coverRequests = remember(ordered) {
+        ordered.mapNotNull { g ->
+            val todo = g.tracks.asSequence()
+                .filter { it.coverPath == null }
+                .map { it.path }
+                .take(3)
+                .toList()
+            if (todo.isEmpty()) null else "f:${g.key}" to todo
+        }.toMap()
+    }
+    RequestVisibleCovers(listState, coverRequests, onRequestCover)
 
     // 出栈由 AppShell 的全局 PAGE 处理器统一做
 
@@ -244,6 +271,31 @@ fun LocalFolderDetailScreen(
                         )
                     }
                 }
+
+                val resumeIndex = remember(ordered, currentSongId) {
+                    if (currentSongId.isNullOrEmpty()) {
+                        null
+                    } else {
+                        ordered.indexOfFirst { it.id == currentSongId }.takeIf { it >= 0 }
+                    }
+                }
+                val resumeVisible = rememberPlayingRowVisible(listState, resumeIndex)
+                val resumeScope = rememberCoroutineScope()
+                ResumePlayingPill(
+                    visible = resumeIndex != null && !resumeVisible,
+                    palette = LocalCoverThemePalette.current,
+                    onClick = {
+                        if (resumeIndex != null) {
+                            resumeScope.launch { listState.animateScrollToItem(resumeIndex) }
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(
+                            end = AppSpacing.sp16,
+                            bottom = AppSpacing.bottomBarInset + AppSpacing.sp12,
+                        ),
+                )
             }
         }
     }

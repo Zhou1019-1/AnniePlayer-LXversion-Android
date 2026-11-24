@@ -79,7 +79,8 @@ internal suspend fun fetchHomeQQ(): List<HomeShelf> {
     )
 
     val key = HomeCachePrefix + "qq"
-    val resp = cacheService.get<Map<String, Any?>>(key) ?: run {
+    val cached = if (homeCacheForceActive()) null else cacheService.get<Map<String, Any?>>(key)
+    val resp = cached ?: run {
         val fresh = runCatching {
             httpPostJson("https://u.y.qq.com/cgi-bin/musicu.fcg", qqHeaders, body)
         }.getOrNull()

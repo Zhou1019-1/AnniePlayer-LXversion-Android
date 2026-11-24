@@ -32,6 +32,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.annieplayer.annie_music.kt.data.local.LocalGroup
+import com.annieplayer.annie_music.kt.data.local.LocalGroupSets
 import com.annieplayer.annie_music.kt.data.local.LocalLibraryStore
 import com.annieplayer.annie_music.kt.data.local.LocalSection
 import com.annieplayer.annie_music.kt.data.local.LocalTrackMeta
@@ -63,12 +64,20 @@ import com.annieplayer.annie_music.kt.widgets.shortScrollbar
 @Composable
 fun LocalAlbumListScreen(
     tracks: List<LocalTrackMeta>,
+    groupsAll: LocalGroupSets,
     isTop: Boolean,
     onClose: () -> Unit,
     onOpenAlbum: (String) -> Unit,
+    onRequestCover: (String) -> Unit = {},
     modifier: Modifier = Modifier,
 ) {
-    val groups = remember(tracks) { groupTracks(tracks, LocalSection.albums) }
+    val groups = remember(groupsAll, tracks.size) {
+        if (groupsAll.matches(tracks.size)) {
+            groupsAll.of(LocalSection.albums)
+        } else {
+            groupTracks(tracks, LocalSection.albums)
+        }
+    }
     // 搜索框：与曲库主页同一个组件、同一套尺寸（sp16 左右 / sp4 上下 / 44dp 高）；
     // 匹配专辑名或专辑艺术家
     var query by remember { mutableStateOf("") }
@@ -125,6 +134,18 @@ fun LocalAlbumListScreen(
         }
     }
     val gridState = rememberLazyGridState()
+    // 组内前几首「还没抽过封面」的歌：卡片滚到可见时才请求，见 RequestVisibleCovers
+    val coverRequests = remember(ordered) {
+        ordered.mapNotNull { g ->
+            val todo = g.tracks.asSequence()
+                .filter { it.coverPath == null }
+                .map { it.path }
+                .take(3)
+                .toList()
+            if (todo.isEmpty()) null else g.key to todo
+        }.toMap()
+    }
+    RequestVisibleCovers(gridState, coverRequests, onRequestCover)
 
     // 出栈由 AppShell 的全局 PAGE 处理器统一做（见 AppShell「页面栈的返回」）
 

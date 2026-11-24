@@ -78,7 +78,6 @@ enum class ModeDropdownMode(val value: String, val label: String) {
     song("song", "单曲搜索"),
     album("album", "专辑搜索"),
     singer("singer", "歌手搜索"),
-    qobuz("qobuz", "国外解析"),
     ;
 
     companion object {

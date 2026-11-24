@@ -88,13 +88,13 @@ fun SelectCheckBox(
     val outlineColor by animateColorAsState(
         targetValue = when {
             !enabled -> AppColors.textDisabled
-            checked -> AppColors.primary
-            else -> AppColors.textTertiary
+            checked -> AppColors.white
+            else -> AppColors.whiteA50
         },
         animationSpec = tween(durationMillis = SelectCheckTintMs),
         label = "selectCheckOutline",
     )
-    val checkColor = if (enabled) AppColors.primary else AppColors.textDisabled
+    val checkColor = if (enabled) AppColors.white else AppColors.textDisabled
 
     Box(
         modifier = modifier

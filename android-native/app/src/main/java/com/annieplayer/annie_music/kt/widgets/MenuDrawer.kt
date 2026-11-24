@@ -46,9 +46,11 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
+import com.annieplayer.annie_music.kt.R
 import com.annieplayer.annie_music.kt.ui.theme.AppColors
 import com.annieplayer.annie_music.kt.ui.theme.AppDuration
 import com.annieplayer.annie_music.kt.ui.theme.AppEasing
@@ -104,8 +106,11 @@ fun MenuDrawer(
     onClearSaveDir: () -> Unit,
     onContact: () -> Unit,
     modifier: Modifier = Modifier,
-    onHifiSite: () -> Unit = {},
-    onSpectrumSite: () -> Unit = {},
+    onPcVersion: () -> Unit = {},
+    lxPluginCount: Int = 0,
+    onManageLxPlugins: () -> Unit = {},
+    localScanExcluded: Int = 0,
+    onLocalScan: () -> Unit = {},
 ) {
     // 返回手势：打开时先关抽屉
     BackHandler(enabled = visible) { onClose() }
@@ -197,28 +202,78 @@ fun MenuDrawer(
             )
             Spacer(modifier = Modifier.height(AppSpacing.sp8))
 
-            // ── 账号配置 ──
+            MenuDrawerSectionLabel(text = "本地曲库")
+            MenuDrawerRow(
+                label = "文件扫描",
+                onTap = onLocalScan,
+                subtitle = if (localScanExcluded == 0) {
+                    "扫描范围、过滤规则、目录缓存"
+                } else {
+                    "已排除 $localScanExcluded 项"
+                },
+                icon = { MenuDrawerFolderIcon(tint = AppColors.glyphStrong) },
+            )
+            Spacer(modifier = Modifier.height(AppSpacing.sp8))
+
             MenuDrawerSectionLabel(text = "账号配置")
+            MenuDrawerRow(
+                label = "落雪插件管理",
+                onTap = onManageLxPlugins,
+                subtitle = if (lxPluginCount == 0) {
+                    "暂无已导入插件 · 国内四平台的下载需要在插件解析"
+                } else {
+                    "已导入 $lxPluginCount 个插件"
+                },
+                icon = {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_brand_lx_plugin),
+                        contentDescription = null,
+                        tint = AppColors.glyphStrong,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                },
+            )
             MenuDrawerRow(
                 label = "Apple Music 服务",
                 onTap = {
                     onAppleService()
                 },
-                icon = { MenuDrawerKeyIcon(tint = AppColors.glyphStrong) },
+                icon = {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_brand_apple),
+                        contentDescription = null,
+                        tint = AppColors.glyphStrong,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                },
             )
             MenuDrawerRow(
                 label = "Qobuz Token 管理",
                 onTap = {
                     onQobuzToken()
                 },
-                icon = { MenuDrawerKeyIcon(tint = AppColors.glyphStrong) },
+                icon = {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_brand_qobuz),
+                        contentDescription = null,
+                        tint = AppColors.glyphStrong,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                },
             )
             MenuDrawerRow(
                 label = "KKBOX 账号管理",
                 onTap = {
                     onKkboxAccount()
                 },
-                icon = { MenuDrawerKeyIcon(tint = AppColors.glyphStrong) },
+                icon = {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_brand_kkbox),
+                        contentDescription = null,
+                        tint = AppColors.glyphStrong,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                },
             )
             Spacer(modifier = Modifier.height(AppSpacing.sp8))
 
@@ -282,15 +337,9 @@ fun MenuDrawer(
             // ── 关于 ──
             MenuDrawerSectionLabel(text = "关于")
             MenuDrawerRow(
-                label = "HIFI 科普网站",
-                onTap = onHifiSite,
-                subtitle = "by@买葱花也要砍一刀(2801497426)",
-                icon = { MenuDrawerGlobeIcon(tint = AppColors.glyphStrong) },
-            )
-            MenuDrawerRow(
-                label = "频谱分析网站",
-                onTap = onSpectrumSite,
-                subtitle = "by@HIFI神医章鱼哥(430768125)",
+                label = "安妮播放器pc版",
+                onTap = onPcVersion,
+                subtitle = "Windows 桌面版",
                 icon = { MenuDrawerGlobeIcon(tint = AppColors.glyphStrong) },
             )
             // 注意：Flutter 版点「联系我们」不关抽屉（联系弹窗叠在抽屉之上），此处保持一致
@@ -565,39 +614,9 @@ private fun MenuDrawerSaveLocationCard(
 }
 
 // ═════════════════════════════════════════════════════════════════════════════════
-// 自绘图标（material-icons-core 不含：key_outlined / folder_open / folder_outlined /
+// 自绘图标（material-icons-core 不含：folder_open / folder_outlined /
 // create_new_folder_outlined / delete_outline / public；按 Flutter 图标栅格近似绘制）
 // ═════════════════════════════════════════════════════════════════════════════════
-
-/** 钥匙（对齐 `Icons.key_outlined`）：左侧圆环 + 横向匙杆 + 右侧匙齿。 */
-@Composable
-private fun MenuDrawerKeyIcon(modifier: Modifier = Modifier.fillMaxSize(), tint: Color = AppColors.white54) {
-    Canvas(modifier = modifier) {
-        val w = size.width
-        val h = size.height
-        val stroke = w * 0.10f
-        drawCircle(
-            color = tint,
-            radius = w * 0.21f,
-            center = Offset(w * 0.28f, h * 0.50f),
-            style = Stroke(width = stroke),
-        )
-        drawLine(
-            color = tint,
-            start = Offset(w * 0.49f, h * 0.50f),
-            end = Offset(w * 0.90f, h * 0.50f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-        drawLine(
-            color = tint,
-            start = Offset(w * 0.72f, h * 0.50f),
-            end = Offset(w * 0.72f, h * 0.70f),
-            strokeWidth = stroke,
-            cap = StrokeCap.Round,
-        )
-    }
-}
 
 /** 文件夹（对齐 `Icons.folder_outlined`）：闭合文件夹轮廓 + 折角。 */
 @Composable

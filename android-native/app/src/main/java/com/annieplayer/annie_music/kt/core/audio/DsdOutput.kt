@@ -15,26 +15,36 @@ package com.annieplayer.annie_music.kt.core.audio
  * （比值为 58.8），等于每次听 DSD 都白插一次带限重采样，还顺手丢掉了 176.4 kHz 的信息。
  * 现在 DSD 走自己这条轴：档位只给 44.1 家族，且**优先于**常规重采样目标。
  *
- * ## DoP / Native 为什么现在是灰的
+ * ## DoP / Native 的前置条件是**通路**，不是设置
  *
  * - **DoP**：把 DSD 裸流封装进 24 bit PCM 帧（帧内 0x05 / 0xFA 标记）。要求传输**逐字节不变**
  *   —— 只要过一次 AudioFlinger 的 mixer，STREAM_MUSIC 音量就是一次 float 乘法，标记必被改写，
- *   DAC 收到的是乱码（爆音或静音）。所以 DoP 的前提是**独占通路**（AAudio MMAP / USB 直取）。
- * - **Native**：裸 DSD 交给支持 Native DSD 的 DAC。Android 没有这条路：UAC2 的音频端点
- *   是 isochronous，而 `UsbDeviceConnection` 只支持 bulk / interrupt，必须自带 libusb 驱动
- *   （海贝就是这么做的）并配特定型号的 DAC。
+ *   DAC 收到的是乱码（爆音或静音）。满足它的通路不止一条：USB 独占、DAP 内置 DAC 直通、
+ *   回读保真的 AAudio 独占流。
+ * - **Native**：裸 DSD（32 bit word）交给支持 Native DSD 的 DAC。USB 直连时要求 DAC 暴露
+ *   raw alt；DAP 上则是「私有 `audio_format_t` + word 率 + DIRECT 轨」，由厂商 HAL 直送内置 DAC。
  *
- * 两条都还没做，所以灰显并写明原因 —— **不是"设置没做"，是"通路没做"**。
+ * 所以这个枚举描述的是**用户意愿**，能不能生效由运行时的 `resolveDsdChain` 裁决，
+ * 结果通过 `AudioStatus.dsdTransport` 上报 —— 界面显示的是**实际生效的那一级**，
+ * 不在设置里预判设备能力（预判必然误伤，见 99.7）。
  */
-enum class DsdOutputMode(val key: String, val label: String) {
-    /** 解成 PCM（当前唯一可用的路径） */
-    pcm("pcm", "PCM"),
+enum class DsdOutputMode(val key: String, val label: String, val note: String) {
+    /** 解成 PCM：任何通路都送得出去 */
+    pcm("pcm", "PCM", ""),
 
-    /** DSD over PCM：塞进 24 bit 帧，需要独占通路才不被改写 */
-    dop("dop", "DoP"),
+    /** DSD over PCM：塞进 24 bit 帧 */
+    dop(
+        "dop", "DoP",
+        "需要一条逐字节保真的通路（USB 独占或 DAP 内置 DAC 直通）；" +
+            "系统混音会缩放音量、改写 0x05/0xFA 帧标记，那时自动落回 PCM",
+    ),
 
-    /** 裸 DSD 给 DAC：需要 USB 独占 + 支持 Native DSD 的设备 */
-    native("native", "Native"),
+    /** 裸 DSD 给 DAC */
+    native(
+        "native", "Native",
+        "需要 USB 独占且 DAC 暴露 raw alt，或 DAP 内置 DAC 直通；" +
+            "两条都不成立时自动落回 DoP，再不行落回 PCM",
+    ),
     ;
 
     companion object {
@@ -190,69 +200,14 @@ fun dsdPcmLowpassNominal(level: DsdLevel?): Int = when (level) {
  */
 const val DSD_PCM_LOWPASS_MIN_HZ: Int = 35_000
 
-/** 某个 DSD 模式此刻能不能选；不可用时 [reason] 是给用户看的一句话 */
-data class DsdModeAvailability(val enabled: Boolean, val reason: String)
-
-/**
- * 模式可用性判定。
- *
- * ## DoP 的前置条件不是「USB 独占」，而是「逐字节保真的 PCM 通路」
- *
- * DoP 把 DSD 的 1-bit 位流按 8 bit 一组塞进 24 Bit PCM 帧，靠帧头 `0x05 / 0xFA`
- * 让 DAC 认出来。所以它要求的是**链路上一个字节都不许被改** —— 任何 SRC、任何音量缩放、
- * 任何格式转换都会把标记敲掉。
- *
- * 「不许被改」这条要求可以被多种通路满足，USB 独占只是其中一种：
- *
- * - **AAudio EXCLUSIVE 流**：只要 HAL 真给 EXCLUSIVE、且**回读的率/格式与请求一致**，
- *   数据就原样到 HAL。`AaudioSink` 已经在做这个校验（`realRate != sampleRate` /
- *   `realFormat` 对不上都判失败），所以这条路的判据是"回读保真"，不是"是不是 USB"。
- * - **系统 offload / direct 轨**：`AUDIO_OUTPUT_FLAG_DIRECT` 理论上也行，
- *   但 mixer 侧仍可能插手，可信度不如上面两条。
- * - **USB 独占（UAC2 直连）**：最硬的保真，但**尚未实现**。
- *
- * 所以这里的 `exclusiveReady` 语义是「有一条能保证逐字节保真的独占流」，
- * **不是**「USB 独占可用」。将来 USB 直连做出来，它只是又多了一个满足者。
- *
- * ## Native DSD 的前置条件
- *
- * 不是「平台有没有 DSD 格式」的问题 —— 那条路早就清楚了：`AudioFormat` / `AAudio` 的
- * encoding 枚举里没有 DSD，`AudioTrack` 承载不了 1-bit 位流，所以**系统通路永远不行**。
- * 唯一可行的是 USB 直连自己发 iso 传输（`UsbAudioDirect` / `UacEngine`），
- * 由它去选设备的 raw alt。
- *
- * 因此这一项的判据是两条**都成立**：通路逐字节保真 + DAC 真的暴露了 raw alt。
- * 后者读不出来时按"不可用"处理 —— 把 PCM 灌进 raw 通道设备不报错，只当 1-bit 解成满幅噪声。
- *
- * @param exclusiveReady 是否有一条能保证逐字节保真的独占流（**不限于 USB**）
- * @param usbDacReady DAC 是否暴露了 raw DSD 通道（`UsbDacCaps.hasRawAlt`）
- */
-fun dsdModeAvailability(
-    mode: DsdOutputMode,
-    exclusiveReady: Boolean = false,
-    usbDacReady: Boolean = false,
-): DsdModeAvailability = when (mode) {
-    DsdOutputMode.pcm -> DsdModeAvailability(true, "")
-    DsdOutputMode.dop -> if (exclusiveReady) {
-        DsdModeAvailability(true, "")
-    } else {
-        DsdModeAvailability(
-            false,
-            "需要不受 mixer 改动的独占流：系统混音会缩放音量、改写 DoP 的帧标记",
-        )
-    }
-    DsdOutputMode.native -> when {
-        exclusiveReady && usbDacReady -> DsdModeAvailability(true, "")
-        !exclusiveReady -> DsdModeAvailability(
-            false,
-            "需要 USB 独占通路：系统通路送不出原生 1-bit 流",
-        )
-        else -> DsdModeAvailability(
-            false,
-            "设备没有暴露 raw DSD 通道（UAC2 的 DSD_U32 / UAC1 的 FORMAT_TYPE_UNDEFINED）",
-        )
-    }
-}
+// 「这个模式能不能选」不再在设置层判 —— 判据已移到运行时的 `resolveDsdChain`
+// （`dsd/DsdTransportPlan.kt`）：它按**实测通路 + 设备能力**裁决，并把降级原因一起带出来。
+// 设置页只表达意愿（见 `DsdOutputMode.note`），播放页显示实际生效的那一级。
+//
+// 以前这里用 `exclusiveReady` 把 DoP / Native 直接灰掉，两个后果都修不掉：
+// ① 用户连选都选不了，就永远看不到"为什么没生效"；
+// ② DoP 的成立条件不止 USB 独占（DAP 内置 DAC 直通、回读保真的 AAudio 流都算），
+//    拿"此刻不是 USB 独占"当否决理由，会把 DAP 上唯一有效的路判成不可用。
 
 /**
  * DSD → PCM 可用的**最高**目标率。

@@ -152,8 +152,8 @@ fun outputSpecOf(s: AudioOutputStatus): OutputSpec {
     // 独占通路不过 AudioFlinger：`nativeRate`（`PROPERTY_OUTPUT_SAMPLE_RATE`）描述的是
     // mixer，与本通路无关。用它当"设备率"会把 88.2k 的独占流显示成 `88.2→48`——
     // 看起来像被系统降了一级，实际端点收到的就是我方交付的那个率。
-    val exclusive = s.effectivePath == OutputPath.usbDirect ||
-        s.effectivePath == OutputPath.aaudioExclusive
+    val exclusive = s.effectivePath == SinkKind.usbUac ||
+        s.effectivePath == SinkKind.oboe
     val outRate = when {
         s.bitPerfect -> inRate
         exclusive -> inRate
@@ -283,8 +283,8 @@ fun outputNotes(s: AudioOutputStatus): List<String> = buildList {
     // ⚠️ 这条只对**系统通路 + USB DAC** 成立。独占生效后 `route` 同样是 `usb`，
     // 但它直接写端点、根本不经过 mixer —— 不加这个排除，界面会在一台正在原样直出的
     // 设备上写「系统可能再转一次」，把没有问题说成有问题。
-    val exclusive = s.effectivePath == OutputPath.usbDirect ||
-        s.effectivePath == OutputPath.aaudioExclusive
+    val exclusive = s.effectivePath == SinkKind.usbUac ||
+        s.effectivePath == SinkKind.oboe
     // DSD 的目标率是用户选的，不是"按设备声明推出来的"，这条提醒对它不成立
     if (s.dsdTargetRate == 0 && !exclusive && s.route == AudioRoute.usb &&
         s.tier == OutputTier.ownSrc && s.didResample
