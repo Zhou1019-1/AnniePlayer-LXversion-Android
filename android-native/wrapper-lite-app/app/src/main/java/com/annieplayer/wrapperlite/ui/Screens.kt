@@ -201,6 +201,49 @@ fun RootScreen(
         }
     }
 
+    val warn = bgWarn
+    if (warn != null && !bgDismissed) {
+        AlertDialog(
+            onDismissRequest = { bgDismissed = true },
+            containerColor = Card,
+            title = {
+                Text("后台限制未放开", fontSize = 18.sp, fontWeight = FontWeight.SemiBold)
+            },
+            text = {
+                Column {
+                    Text(warn.describe(), fontSize = 13.sp, color = MusicRed)
+                    Spacer(Modifier.height(10.dp))
+                    Text(
+                        "系统冻结本应用后，服务的端口还在监听但不再响应，播放端会报「检测服务失败」。",
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        warn.actionHint,
+                        fontSize = 13.sp,
+                        color = TextSecondary,
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        bgDismissed = true
+                        WrapperLite.openBatterySettings(ctx)
+                    },
+                ) {
+                    Text("去设置", color = MusicRed, fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { bgDismissed = true }) {
+                    Text("稍后", color = TextSecondary, fontSize = 15.sp)
+                }
+            },
+        )
+    }
+
     if (show2fa) {
         TwoFaDialog(
             onSubmit = { code ->

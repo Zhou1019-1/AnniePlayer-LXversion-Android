@@ -334,7 +334,7 @@ object WrapperLite {
     fun reportBackgroundBlockIfAny(ctx: Context) {
         val state = readBackgroundState(ctx)
         if (state.unrestricted) return
-        val line = "[local] ${state.describe()}"
+        val line = "[local] ${state.describe()} · ${state.actionHint}"
         if (_logs.value.lastOrNull() == line) return
         appendLog(line)
     }
