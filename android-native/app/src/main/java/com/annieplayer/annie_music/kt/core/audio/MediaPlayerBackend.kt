@@ -1377,28 +1377,8 @@ class MediaPlayerBackend(
         }
     }
 
-    /**
-     * 用户设定的音量（0..1）。
-     *
-     * **只有调音模式会真的用它**：`player.volume` 是软件音量（每轨 float 缩放），
-     * 在透明模式下那就是"我方动数据"，与位完美自相矛盾。透明模式一律交绝对音量
-     * （蓝牙 AVRCP / 有线与 USB 的系统媒体音量），见 [_effectiveVolume]。
-     */
-    private var _userVolume: Float = 1f
-
     /** 主线程投递（`player.volume` 必须在播放器所属线程改） */
     private val _mainHandler: Handler by lazy { Handler(Looper.getMainLooper()) }
-
-    /**
-     * 真正下发给 ExoPlayer 的音量。
-     *
-     * - **透明**：恒 `1f`。数据路径上不做任何衰减，音量由系统/设备决定
-     *   （这也是将来 AAudio 独占能直接用的前提：独占流本来就不经过 mixer 音量）。
-     * - **调音**：用户的音量值。调音模式的契约就是"我方处理、用户说了算"，
-     *   PEQ / 响度 / 音量都是他的工具，不能在调音模式里替他拆掉一个。
-     */
-    private fun _effectiveVolume(): Float =
-        if (!_tuningActiveNow()) 1f else _userVolume
 
     /**
      * 这一首**实际**允许调音吗 —— 全应用唯一的运行时判据。
@@ -1411,8 +1391,8 @@ class MediaPlayerBackend(
      * 设置页显隐仍按意图算（它要展示"你选的东西意味着什么"），音频路径按生效算。
      *
      * **DSD 直出（DoP / Native）一律不算调音**：那条通路上没有 PCM 样本可处理，
-     * 任何滤波/增益都会连 DoP 标记一起改掉。所以 DSD 模式下音量也随之交回设备与系统
-     * （`_effectiveVolume` 返回 1.0），界面不会再显示「调音」。
+     * 任何滤波/增益都会连 DoP 标记一起改掉。所以 DSD 模式下音量也随之交回设备与系统，
+     * 界面不会再显示「调音」。
      */
     private fun _tuningActiveNow(): Boolean =
         MoreSettings.tuningEnabledNow(
@@ -1447,24 +1427,19 @@ class MediaPlayerBackend(
             raw = _dsdTransport.isRaw,
         )
         val player = _player ?: return
-        val value = if (exclusive) 1f else _effectiveVolume()
         if (Looper.myLooper() == Looper.getMainLooper()) {
-            player.volume = value
+            player.volume = 1f
         } else {
-            _mainHandler.post { _player?.volume = value }
+            _mainHandler.post { _player?.volume = 1f }
         }
     }
 
     override suspend fun setVolume(volume: Double) {
         withContext(Dispatchers.Main.immediate) {
-            _userVolume = volume.toFloat().coerceIn(0f, 1f)
-            // 独占通路：滑块的落点是 `ExclusiveVolume`，不是 `player.volume`
             if (_exclusiveVolumeActive()) {
-                ExclusiveVolume.setLinear(_userVolume)
-                _player?.volume = 1f
-            } else {
-                _player?.volume = _effectiveVolume()
+                ExclusiveVolume.setLinear(volume.toFloat().coerceIn(0f, 1f))
             }
+            _player?.volume = 1f
         }
     }
 

@@ -1789,7 +1789,6 @@ val translatePickerSongTitle by TranslatePicker.songTitle.collectAsState()
                     },
                     onOpenQueue = { uiViewModel.setQueueVisible(true) },
                     onOpenSongActions = { currentSong?.let { dl.openActions(it) } },
-                    onSetVolume = { volume -> playerViewModel.setVolume(volume) },
                     onToggleTranslation = {
                         uiViewModel.setShowLyricsTranslation(!uiState.showLyricsTranslation)
                     },

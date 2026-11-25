@@ -51,19 +51,14 @@ import com.annieplayer.annie_music.kt.widgets.PlayIcon
 import com.annieplayer.annie_music.kt.widgets.clickableNoRipple
 import kotlin.math.roundToInt
 
-/** 音量轨高度（Flutter：5，播放页 `PlayerVolumeSlider`） */
-private val PlayerVolumeTrackHeight = 5.dp
-
 /** 进度条触控高度（Flutter：26）；端点小圆点直径直接取轨道高度，不另立常量 */
 private val PlayerProgressTouchHeight = 26.dp
 
-/** 进度轨高度：**与音量条同高**（`PlayerVolumeTrackHeight`），用音量条那套样式 */
-private val PlayerProgressTrackHeight = PlayerVolumeTrackHeight
+/** 进度轨高度（Flutter：5） */
+private val PlayerProgressTrackHeight = 5.dp
 
-/** 音量条触控高度（Flutter：28） */
-private val PlayerVolumeTouchHeight = 28.dp
+private val PlayerVolumeTrackHeight = 5.dp
 
-/** 音量图标尺寸（Flutter `Icon(size: 14)`） */
 private val PlayerVolumeIconSize = 14.dp
 
 /** 控制栏左右图标（循环 / 切歌 / 队列） */
@@ -350,23 +345,8 @@ fun PlayerControlsBar(
     }
 }
 
-/**
- * 音量条（1:1 移植 Flutter `PlayerVolumeSlider`）：
- * 左右 14dp 喇叭图标（white 0.25）、中间 5dp 轨道（white 0.08 / 已音量 white 0.3）。
- * 点击与水平拖拽均更新音量。
- *
- * [enabled] = false 时**只保留外观**、不参与命中测试：透明模式下音量由绝对音量
- * （蓝牙 AVRCP / 系统媒体音量）决定，我方不做数字衰减 —— 一个"可拖但不改变音量"的
- * 控件会被当成 bug 上报，所以这里直接断开交互。
- */
 @Composable
-fun PlayerVolumeSlider(
-    volume: Double,
-    onVolume: (Double) -> Unit,
-    enabled: Boolean = true,
-) {
-    val clamped = volume.coerceIn(0.0, 1.0)
-
+fun PlayerVolumePlaceholder() {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = AppSpacing.screenPaddingH),
         verticalAlignment = Alignment.CenterVertically,
@@ -377,52 +357,12 @@ fun PlayerVolumeSlider(
             loud = false,
         )
         Spacer(modifier = Modifier.width(AppSpacing.sp10))
-        Box(modifier = Modifier.weight(1f)) {
-            PlayerWidthProvider { widthPx ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(PlayerVolumeTouchHeight)
-                        .then(
-                            if (!enabled) {
-                                Modifier
-                            } else {
-                                Modifier
-                                    .pointerInput(widthPx) {
-                                        detectTapGestures { tap ->
-                                            onVolume((tap.x / widthPx).coerceIn(0f, 1f).toDouble())
-                                        }
-                                    }
-                                    .pointerInput(widthPx) {
-                                        detectHorizontalDragGestures(
-                                            onDragStart = { start ->
-                                                onVolume((start.x / widthPx).coerceIn(0f, 1f).toDouble())
-                                            },
-                                            onHorizontalDrag = { change, _ ->
-                                                onVolume((change.position.x / widthPx).coerceIn(0f, 1f).toDouble())
-                                            },
-                                        )
-                                    }
-                            },
-                        ),
-                    contentAlignment = Alignment.CenterStart,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(PlayerVolumeTrackHeight)
-                            // 轨道底色对齐 Flutter `white @0.08`（此前误用 white10=0.10）
-                            .background(Color.White.copy(alpha = 0.08f), RoundedCornerShape(AppRadius.r2_5)),
-                    )
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth(clamped.toFloat())
-                            .height(PlayerVolumeTrackHeight)
-                            .background(AppColors.white30, RoundedCornerShape(AppRadius.r2_5)),
-                    )
-                }
-            }
-        }
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .height(PlayerVolumeTrackHeight)
+                .background(AppColors.white30, RoundedCornerShape(AppRadius.r2_5)),
+        )
         Spacer(modifier = Modifier.width(AppSpacing.sp10))
         PlayerSpeakerGlyph(
             modifier = Modifier.size(PlayerVolumeIconSize),
@@ -614,7 +554,6 @@ private fun PlayerQueueGlyph(modifier: Modifier = Modifier, tint: Color) {
     }
 }
 
-/** 喇叭音量图标：填充喇叭 + 1~2 道声波弧线（对齐 Flutter `Icons.volume_down` / `volume_up`） */
 @Composable
 private fun PlayerSpeakerGlyph(modifier: Modifier = Modifier, tint: Color, loud: Boolean) {
     Canvas(modifier = modifier) {

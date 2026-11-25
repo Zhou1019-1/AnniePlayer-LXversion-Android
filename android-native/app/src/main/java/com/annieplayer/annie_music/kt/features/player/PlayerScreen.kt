@@ -73,7 +73,6 @@ import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.annieplayer.annie_music.kt.core.audio.AnnieAudioHolder
 import com.annieplayer.annie_music.kt.core.audio.AudioOutputController
-import com.annieplayer.annie_music.kt.core.audio.AudioOutputMode
 import com.annieplayer.annie_music.kt.core.audio.AudioOutputStatus
 import com.annieplayer.annie_music.kt.core.audio.AudioRoute
 import com.annieplayer.annie_music.kt.core.audio.AudioTone
@@ -166,7 +165,6 @@ fun PlayerScreen(
     onCycleLoopMode: () -> Unit,
     onOpenQueue: () -> Unit,
     onOpenSongActions: () -> Unit,
-    onSetVolume: (Double) -> Unit,
     onToggleTranslation: () -> Unit,
     onSelectTranslateLang: (String) -> Unit,
     onToggleWordByWord: () -> Unit,
@@ -511,9 +509,6 @@ fun PlayerScreen(
             }
             PlayerElasticSpacer(elastic = !geometry.scroll)
 
-            // ── 音量条（紧凑档省掉） ──
-            // 透明模式：音量由绝对音量（蓝牙 AVRCP / 系统媒体音量）决定，我方不衰减，
-            // 所以这里只保留外观、不接交互（详情见 `PlayerVolumeSlider` 的注释）。
             if (!geometry.compact) {
                 Spacer(modifier = Modifier.height(AppSpacing.sp16))
                 Box(
@@ -521,11 +516,7 @@ fun PlayerScreen(
                         .fillMaxWidth()
                         .onSizeChanged { blockHeights["volume"] = it.height },
                 ) {
-                    PlayerVolumeSlider(
-                        volume = player.volume,
-                        onVolume = onSetVolume,
-                        enabled = player.audioStatus?.mode != AudioOutputMode.transparent,
-                    )
+                    PlayerVolumePlaceholder()
                 }
             }
 
