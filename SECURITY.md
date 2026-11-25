@@ -14,6 +14,8 @@
 
 构建或发布所需秘密只由 owner 配置到 GitHub Secrets / Environments，并按最小权限授权。贡献者只提供条目名称、用途与访问阶段，不索取或发送明文。
 
+现有 Android 签名密钥由平台开发者在首次正式发布前一次性交付 owner：keystore 本体装进加密压缩包并走私密邮件，解压口令走另一条渠道，不得与压缩包同一封信、同一条消息。owner 收到后写入 `release` Environment Secret，删除本地明文并保留离线备份。此后不得再次通过仓库、PR、Issue、Actions 日志或群聊传输 keystore 本体、base64 或口令。
+
 ## 疑似泄露
 
 1. 立即停止可能继续使用凭据的工作流，不在公开渠道转发泄露内容。

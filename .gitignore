@@ -31,4 +31,4 @@ captures/
 .env.*
 !.env.example
 
-# 大二进制不得提交；构建交付使用 Actions Artifact 或 Release 资产
+# 大二进制准入与 Android 原生库白名单见 AGENTS.md 第五节；APK/AAB 与签名材料始终禁止入库

@@ -37,11 +37,39 @@ SHA256：<交付产物的 SHA256；无产物则填无>
 
 - 密码、令牌、私钥、签名证书、keystore、Play 服务凭据及其他凭据**不得通过 QQ 传输**，也不得进入 Git、Issue、PR、日志、截图或 Artifact。
 - 所需秘密和证书由 owner 在 **GitHub Secrets / Environments** 中配置并授权。贡献者只说明条目名称、用途和最小权限，不索取明文。
+- 现有 Android 签名密钥由平台开发者在首次正式发布前一次性交付 owner：keystore 本体装进加密压缩包并走私密邮件，解压口令走另一条渠道。owner 写入 `release` Environment Secret 后删除本地明文，并保留离线备份；此后不得再通过仓库、PR、Issue、Actions 日志或群聊传输 keystore 本体、base64 或口令。
 - PR 及来自 fork 的无签名构建不得读取发布秘密。发现泄露时立即停止相关工作流，并通过安全渠道通知 owner 轮换凭据。
 
 ## 五、文件与构建产物
 
-- 大二进制不得提交到 Git，包括安装包、APK、AAB、原生库构建产物、构建缓存及大型媒体样本；使用 GitHub Actions Artifact 或 Release 资产交付。
-- 签名材料与本地配置只保留在开发者本机或 GitHub Secrets / Environments，仓库中不得放入真实凭据。
-- 当前 `build_release.yml` 与 `delivery.yml` 仅为拒绝执行的占位保护，不提供构建或发布能力。真实工程落地后，必须通过 PR 替换并验证，流程约束见 `RELEASING.md`。
-- 保持现有 `LICENSE` 不变，除非另有明确授权与独立 PR。
+二进制默认不直接进入 Git；仅本节白名单内的 Android 原生库与运行时资产可按普通 Git 对象入库。路径与类型必须同时命中，新增单文件不得超过 **90 MiB（94,371,840 字节）**。
+
+### 5.1 允许入库的白名单（owner 于 2026-11-25 批准）
+
+| 路径 | 内容 | 单文件上限 |
+|---|---|---|
+| `android-native/app/src/main/jniLibs/arm64-v8a/*.so` | 自编 / 抽取的原生库（ffmpeg 七件套、`libffmpegkit*`、`libc++_shared`、`libtaglib`、`libtemari`、`liboboe`） | 90 MiB |
+| `android-native/wrapper-lite-app/app/src/main/jniLibs/arm64-v8a/*.so` | QEMU 可执行文件 `libqemu_x86_64.so` | 90 MiB |
+| `android-native/wrapper-lite-app/app/src/main/assets/guest/**` | QEMU guest 资产 `initramfs.dat` / `vmlinuz` / `data.empty.dat` | 90 MiB |
+| `android-native/wrapper-lite-app/app/src/main/assets/lib/**` | aarch64 依赖库 | 90 MiB |
+| `android-native/wrapper-lite-app/app/src/main/assets/qemu-fw/**` | QEMU firmware / keymaps | 90 MiB |
+| `android-native/wrapper-lite-app/assets-src/data.empty.img` | 生成 `data.empty.dat` 的空白 ext4 源镜像 | 90 MiB |
+
+白名单仅适用于本仓，不得扩展到其他平台；是否改用 Git LFS 或新增路径只能由 owner 决定。
+
+### 5.2 仍然禁止入库
+
+- `.jks`、`.keystore`、`.p12`、`.p8`、`.mobileprovision` 及其他签名材料。
+- APK、AAB、DMG、ZIP 安装包；产物只走 Actions Artifact 或 Draft Release。
+- Token、Cookie、账号配置、`local.properties`、含秘密的配置、构建缓存和大型媒体样本。
+- 来源不明、无版本与构建来源记录的第三方运行时。
+
+### 5.3 二进制 PR 审核硬判据
+
+1. 新增单文件 > 90 MiB，或路径不在白名单内，直接要求移除。
+2. 白名单内的 `.so` 必须对应 `android-native/native/**` 下的构建脚本，或 PR 中记录的外部来源。
+3. 自编产物以「构建脚本 + 补丁集 + 提交 SHA」追溯，不要求外部官方 URL；抽取的第三方二进制须给出原始 AAR / 上游版本与 SHA256。
+4. 每个新增二进制必须在 PR 描述中列出「来源 / 版本 / SHA256」，缺失即要求补充。
+5. 白名单文件允许使用普通 Git 对象，不要求也不建议改用 Git LFS。
+
+签名材料与本地配置只保留在开发者本机或 GitHub Secrets / Environments，仓库中不得放入真实凭据。当前仓库没有应用 workflow，不提供构建或发布能力；真实工程落地后必须通过 PR 新增并验证，流程约束见 `RELEASING.md`。保持现有 `LICENSE` 不变，除非另有明确授权与独立 PR。

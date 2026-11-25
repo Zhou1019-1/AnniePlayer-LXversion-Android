@@ -44,6 +44,6 @@ SHA256：<交付产物的 SHA256；无产物则填无>
 ## 安全与文件约束
 
 - 秘密和证书**不走 QQ**，也不进入仓库、Issue、PR、日志或 Artifact。由 owner 配置 GitHub Secrets / Environments；贡献者只提供所需条目名称、用途和最小权限。
-- 大二进制不进 Git。APK、AAB、原生库构建产物及其他构建输出通过 Actions Artifact 或 Release 资产交付。
+- 二进制默认不进 Git；仅 `AGENTS.md` 第五节白名单内的 Android 原生库与运行时资产可按普通 Git 对象提交，单文件不得超过 90 MiB，且 PR 必须列出每个文件的来源、版本和 SHA256。APK、AAB 及其他构建输出仍通过 Actions Artifact 或 Draft Release 交付。
 - 不提交 `.jks`、`.keystore`、私钥、真实环境变量、`local.properties` 或其他本地签名材料；具体忽略规则见 `.gitignore`。
 - 安全问题的沟通方式见 `SECURITY.md`，发布边界见 `RELEASING.md`。

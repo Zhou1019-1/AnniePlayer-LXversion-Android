@@ -4,11 +4,11 @@
 
 本仓库尚无真实 Android 应用工程，因此**当前不可构建、不可签名、不可发布**。
 
-`.github/workflows/build_release.yml` 和 `.github/workflows/delivery.yml` 是手动触发且明确失败的占位保护，用于防止把空仓库包装成成功的构建或交付。它们不会编译源码、生成 Artifact、创建 tag 或 Release，也不代表已具备 CI/CD 能力。不得绕过该保护伪造构建结果。
+当前仓库没有应用 workflow，不会编译源码、生成 Artifact、创建 tag 或 Release，也不代表已具备 CI/CD 能力。不得添加空步骤或固定成功输出，把治理骨架包装成成功的构建或交付。
 
 ## 真实工程落地后的目标流程
 
-以下流程只有在真实 Android 工程、可复现构建与对应测试已通过 PR 合入后才适用。新增或修改 workflow 本身也必须经过 PR 评审。
+以下流程只有在真实 Android 工程、可复现构建与对应测试已通过 PR 合入后才适用。新增或修改 workflow 本身也必须经过 PR 评审。白名单二进制按 `AGENTS.md` 第五节核验；自编原生库以构建脚本、补丁集和提交 SHA 追溯，抽取的第三方二进制仍须记录原始 AAR / 上游版本与 SHA256。
 
 ### 1. PR 无签名构建
 
