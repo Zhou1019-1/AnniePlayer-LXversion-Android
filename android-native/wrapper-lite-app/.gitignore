@@ -1,0 +1,16 @@
+# 构建产物与本地配置：都能重新生成，不入库
+.gradle/
+.kotlin/
+build/
+.cxx/
+local.properties
+.idea/
+*.iml
+*.hprof
+
+# 必须入库的（别加进来）：
+#   app/src/main/assets/guest/      initramfs.dat / vmlinuz / data.empty.dat —— 运行时必需的 guest 资产
+#   app/src/main/assets/lib/        QEMU 的 aarch64 依赖库
+#   app/src/main/assets/qemu-fw/    QEMU firmware / keymaps
+#   app/src/main/jniLibs/           libqemu_x86_64.so —— QEMU 可执行文件
+#   assets-src/data.empty.img       生成 data.empty.dat 的空白 ext4 源镜像

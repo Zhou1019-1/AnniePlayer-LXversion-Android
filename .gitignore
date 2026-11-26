@@ -1,0 +1,103 @@
+# 操作系统与 IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+
+# Gradle / Android 构建与本地状态
+.gradle/
+local.properties
+build/
+*/build/
+.cxx/
+.externalNativeBuild/
+captures/
+.navigation/
+*.hprof
+
+# 编译和交付产物
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# 签名材料与本地环境（不得进入 Git 或通过 QQ 传输）
+*.keystore
+*.jks
+*.p8
+*.p12
+*.key
+*.pem
+*.mobileprovision
+.env
+.env.*
+!.env.example
+
+# 大二进制准入与 Android 原生库白名单见 AGENTS.md 第五节；APK/AAB 与签名材料始终禁止入库
+
+# ── 以下为本仓各端（Flutter 版、android-native/ Kotlin 版）的补充规则 ──────────────
+node_modules/
+.expo/
+dist/
+npm-debug.*
+*.orig.*
+web-build/
+*.log
+
+# build artifacts
+android/.gradle/
+android/app/build/
+android/build/
+modules/*/android/build/
+
+# build artifacts
+release/
+.agents/out*.json
+.omo/
+
+# kotlin-native（android-native/）本地状态：build/ 与 .cxx/ 已由上方全局规则覆盖
+android-native/.kotlin/
+
+# LunaBeat 反编译参考（纯本地对照用，整个目录不进版本库）
+#   lunabeat_src    jadx 产物，约 2.6 万文件 / 210 MB
+#   lunabeat_smali  apktool 产物，约 3.1 万文件 / 527 MB
+#   lunabeat.apk    反编译的源 APK
+#   so/             从 APK 抽出的 so
+# 全部可由 jadx / apktool 重新生成，不必入库。
+_ref/
+
+# 逆向分析资产（约 744 MB）：`_probe` 的 Apple 逆向脚本 + keys、`wrapper`、`ak1ra`、
+# `metadata_apis`、`wabt*` 等。
+#
+# 以前只有 `.git/info/exclude` 里一条**本地**规则 —— 那个文件本身不入库，换机器后就
+# 没人知道这里曾经有这些目录了（规则可读性和 `_ref/` 不一致）。放这里是为了让规则
+# 跟着仓库走；`.git/info/exclude` 里那份保留，双保险。
+analysis/
+
+android-native/native/ffmpeg/src/
+android-native/native/ffmpeg/prefix*/
+
+# 构建期临时目录（.tmp-audio-test 的格式测试音频只留本机自测用，不进库）
+# 故意**不带尾斜杠**：脚本改代码前的备份目录 `.tmp-backup/<ts>/` 在还没创建时，
+# `git check-ignore` 会按「文件」去匹配，带斜杠的模式匹配不上。
+**/.tmp-*
+
+# 本机工具链（rustup/cargo 等，约 920 MB）。
+# 和 analysis/ 分开：analysis/ 放的是**逆向分析资产**（要留），这里放的是**能重装的环境**。
+# native/temari/build-android.ps1 默认从这里找 cargo/rustup（可用 ANNIE_CARGO_HOME 覆盖）。
+.toolchains/
+
+# 设备探测抓下来的 dump（176 文件 / 46.5 MB）：
+#   apklibs/          从设备 dd 的 framework .so（libaudioclient / libaudiofoundation …），
+#                     逆向 AOSP 音频栈用，随时可重拉，且是 AOSP 版权代码
+#   jniLibs-backup/   本工程自己 so 的备份，源头就是 jniLibs/
+#   *.txt|*.html      各平台 URL / 音质 / 电台接口的响应样本，证据而非源码
+# 真正有测试价值的两个已转正为夹具（app/src/test/resources/fixtures/kuwo_*.xml）。
+android-native/.probe-backup/
+_scr/
+
+# 签名口令文件：密钥库本体由上方全局规则覆盖（CI 走 Environment Secret）
+keystore.properties
+
+
