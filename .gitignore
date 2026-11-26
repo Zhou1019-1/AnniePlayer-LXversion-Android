@@ -1,16 +1,48 @@
+# 操作系统与 IDE
+.DS_Store
+Thumbs.db
+.idea/
+*.iml
+
+# Gradle / Android 构建与本地状态
+.gradle/
+local.properties
+build/
+*/build/
+.cxx/
+.externalNativeBuild/
+captures/
+.navigation/
+*.hprof
+
+# 编译和交付产物
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+
+# 签名材料与本地环境（不得进入 Git 或通过 QQ 传输）
+*.keystore
+*.jks
+*.p8
+*.p12
+*.key
+*.pem
+*.mobileprovision
+.env
+.env.*
+!.env.example
+
+# 大二进制准入与 Android 原生库白名单见 AGENTS.md 第五节；APK/AAB 与签名材料始终禁止入库
+
+# ── 以下为本仓各端（Flutter 版、android-native/ Kotlin 版）的补充规则 ──────────────
 node_modules/
 .expo/
 dist/
 npm-debug.*
-*.jks
-*.keystore
-*.p8
-*.p12
-*.key
-*.mobileprovision
 *.orig.*
 web-build/
-.DS_Store
 *.log
 
 # build artifacts
@@ -24,15 +56,8 @@ release/
 .agents/out*.json
 .omo/
 
-# kotlin-native（android-native/）构建产物与本地配置
-android-native/.gradle/
+# kotlin-native（android-native/）本地状态：build/ 与 .cxx/ 已由上方全局规则覆盖
 android-native/.kotlin/
-android-native/build/
-android-native/app/build/
-android-native/local.properties
-# NDK/CMake 外部构建目录（cmake 每次自动重新生成）
-android-native/.cxx/
-android-native/app/.cxx/
 
 # LunaBeat 反编译参考（纯本地对照用，整个目录不进版本库）
 #   lunabeat_src    jadx 产物，约 2.6 万文件 / 210 MB
@@ -72,9 +97,7 @@ android-native/native/ffmpeg/prefix*/
 android-native/.probe-backup/
 _scr/
 
-# 签名材料：密钥库与口令只在本机，绝不入库（CI 走 Environment Secret）
-*.jks
-*.keystore
+# 签名口令文件：密钥库本体由上方全局规则覆盖（CI 走 Environment Secret）
 keystore.properties
 
 

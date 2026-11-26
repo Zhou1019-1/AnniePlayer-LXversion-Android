@@ -1,479 +1,86 @@
-# 规则
+# 安妮播放器 Android 仓库 · AI 协作规范
 
-> 本文件**只放规则**，不记录进度、不记录已完成项。进度看代码本身。
+本文件适用于所有参与本仓库的人类贡献者与 AI agent。开始任何修改前，必须先阅读本文件及 `CONTRIBUTING.md`。
 
-## 0. 最高优先级
+## 一、项目边界
 
-- **禁止写任何注释。** 行注释、块注释、KDoc、`//noinspection`、`#` —— 一律不写。
-  该解释的写进回复或提交说明，不写进代码。
-- **不信任任何注释。** 读代码或排查时看到注释，先删掉再看。
-  判断只依据实际读写那行状态的代码：找到**写**它的和**读**它的，两处对上。
-  注释与代码冲突，永远删注释。
-- 「`//` 后面跟着以 `;` 结尾的内容」这条扫描保留：正常提交不该有注释，扫到就是有人又写了。
-- **出 bug 先查自己的代码，不要急着加日志。**
-  先把完整链路读一遍：谁写这个状态、谁读它、语义变了没有；读得出来就直接改。
-  只有真的读不出来才加日志，且一次问准 —— 不要一版改一处、装一次、试一回。
-  反例 ①：只差一处语义（有防抖 → 无防抖）却先加日志点屏幕试了五轮。
-  反例 ②：USB 独占三版靠 dump 定位，而错误就在自己 `open()` 的注释里（alt 与设率顺序猜反了）。
-- **改代码只走「读文件 → 定点替换」的编辑工具，禁止使用批量命令和脚本。**
-  禁止批处理回写：`Set-Content` / `Out-File` / `-replace`、Python、`sed` / `awk`、循环替换、
-  批量重命名。这条是硬性的 —— 曾用 `Set-Content -NoNewline` 把一份 1400 行 Kotlin 的换行全抹平。
-  脚本只做**只读**的事（列文件、量体积、跑编译、装 APK、查设备）。
-- **一次改多个文件也必须逐个用编辑工具；用命令改任何源码一次即视为违规，立即停下改用编辑工具重做。**
-- 只有用户明确说「提交」才 `git commit`；**从不 push**。
+- **章鱼只负责 Windows 版开发**，不负责 Android 或其他桌面/移动平台的功能开发。
+- 本仓库的 Android 应用由电狗（`@chenhaochen66`）作为平台负责人主导设计、实现、测试和维护；章鱼作为仓库 owner 进行治理、轻审与发布审批，不承诺实现 Android 需求。
+- 当前仓库尚无 Android 应用源码或真实工程。不得伪造工程、构建结果、测试记录、Run、Artifact、SHA256 或发布状态。
 
-## 1. 范围
+## 二、分支与 PR 硬规则
 
-- 只改 Kotlin 版（`android-native/`），不看 Flutter / Dart 版。
-- 非必要不用子 agent。
+1. 所有人和 AI 的所有改动都必须从独立分支发起 PR；功能开发使用 `feature/<主题>`，治理任务可使用 `chore/<主题>`。
+2. **禁止直接推送 `main`**，包括文档、配置、格式化及“微小修复”。AI 不得以任务紧急、已获口头认可等理由绕过 PR。
+3. 未经 owner 明确批准，任何人和 AI 均不得创建或推送 tag、创建或发布 Release，也不得擅自合并 PR 或修改仓库设置。
+4. PR 必须如实列出改动、验证命令与结果、未验证事项和已知限制；不得把“未运行”写成“通过”。
+5. 代码、文档、workflow 的变更都要经过审阅。AI 生成内容由提交者负责核对，不能以 AI 输出代替测试或审查。
+6. **Android 平台负责人轻审制（2026-11-26 起）**：电狗主导日常代码结构、依赖选择、构建方式、测试安排和溯源文档形式，并对 AI 产出负责。owner 保留 1 次 approval 并负责合并，但只审 PR 摘要、范围、验证声明与签名秘密、workflow、发布等风险边界；不默认逐行审查、逐项重算全部二进制哈希或按个人技术偏好反复打回。电狗仍不得自行合并，owner 可事后抽查。
 
-## 2. 调试纪律
+## 三、联系与 agent 汇报
 
-- 不写调试日志；临时诊断代码（计时打点、临时 dump 文件）用完必须删干净。
-- 不截图。
-- 改之前先读文件；改完必须跑一次编译（`gradlew :app:compileDebugKotlin`）再下结论，不靠猜。
-- 编译过了还要跑一次本地单测（`gradlew :app:testDebugUnitTest`）—— 编译只证明「能过编译」，
-  证明不了「行为对」。能测的地方见 [6.1](#61-本地单元测试jvm改完就跑)。
+- **QQ 是主要联系渠道**，具体联系方式以章鱼公开的信息为准。
+- 需要章鱼协调评审、权限、Runner、签名或发布时，贡献者 agent 必须发送以下标准模板；没有的项目填“无”，不得编造：
 
-## 3. 代码分层
+```text
+仓库：<owner/repo 与 URL>
+PR：<PR URL 或编号；未创建则说明>
+分支 commit：<分支名 + 完整 commit SHA>
+改动：<按文件概述实际改动>
+测试：<逐项列出命令、结果；未运行须注明>
+Run 或 Artifact：<GitHub Actions Run / Artifact URL；无则填无>
+SHA256：<交付产物的 SHA256；无产物则填无>
+需要协助：<需要章鱼处理的具体事项；无则填无>
+已知限制：<风险、未覆盖场景或平台限制；无则填无>
+```
 
-- **两种包，一条依赖方向**：`data/sources/<platform>/` 放「怎么跟这家平台说话」（HTTP / 签名 /
-  UA / mapper / 音质 / **元数据**）；`data/sources/<purpose>/`（`home`、`lyric`）放「一种能力」的
-  契约 + 注册表 + 每平台一个文件。**依赖只能 用途包 → 平台包，反向禁止**（平台包 import 用途包
-  就会成环）。判断一个文件该放哪边，只问一句：它描述的是「平台怎么说话」还是「一种能力的调度」。
-- **直链取链不在平台包里**：国内四平台（网易 / QQ / 酷狗 / 酷我）的播放与下载统一由落雪插件
-  解析，内置直链接口**已删除**（无降级、无跨源兜底）；KKBOX 走它自己的官方票据接口
-  （`data/sources/kkbox/KkboxPlay.kt` + `KkboxDownloader`），Apple 走 `ApplePlaybackServer` /
-  `AppleDownloader`。要给某个平台加取链，先想清楚为什么不走插件。
-- `data/sources/common/`：各平台**逐字节相同**的原语（`jsTruthy`、`asText`、`encodeComponent`、
-  `decodeHtmlEntities`、`signParams`）。同名不同义的（各平台 `_strOr` / `_asMap` / `_toInt`）
-  **留在各自平台包里**，别硬合并语义。
-- Apple **官方**接口：`data/sources/apple/AppleMusicApi.kt`（`amp-api-edge`，搜索 / 详情 / 专辑 /
-  歌手 / storefront）。
-- Apple **非官方**接口：`data/sources/apple/wrapper/`（歌词、`/m3u8`、`/key`）。
-  服务是 WorldObservationLog/wrapper 那一族，接口形状固定（`/status` `/m3u8?adamId=`
-  `/key?adamId=&uri=` `/lyrics?adamId=&language=&syllable=`）。
-  **只有两个源，二选一、不自动回落**：`AppleServiceSettings.useLocal` 开 → 本机 WrapperLite
-  （`127.0.0.1:12341`）；关 → 用户在设置页添加的远程地址（`AppleWrapperRegistry` 里选中的那条，
-  userinfo 按 HTTP Basic 发）。两边都不可用就直接报错。
-  **禁止**再加第三方站点、CF 挑战 / WebView 指纹兜底、跨源混取、以及「本地失败自动回落远程」
-  这类静默换源（历史上 ak1ra 那套就是这么来的，已整条删除）。
-- 主页：`data/sources/home/` 里 `HomeFeedApi.kt` 只放契约（`HomeShelf` 常量 / `fetchHomeShelves`
-  注册表 / 共用取值工具），实现一家一个文件（`NeteaseHome` / `QqHome` / `KuwoHome` / `KugouHome`）。
-  酷我 feed 的 XML 解析是纯函数，单独 `KuwoHotPage.kt` 并带单测。
-- 歌词：每个平台一个 `LyricSource`（`data/sources/lyric/`），按 `platform` **一对一**匹配，
-  登记进 `LyricSources.all`。**不许有兜底平台**（以前 `else` 落到酷我，漏注册也能「碰巧」出歌词）；
-  也不许在各实现里自己填占位文本或自己缓存 —— 占位与缓存只在门面 `fetchLyric` 做。
-- 传输层只在平台包里有一份（例：`data/sources/kugou/KugouHttp.kt` 的 `kugouSignedPost` /
-  `kugouMid` / `kugouPlainHeaders`）。用途包要发同样的签名请求，**调它**，不要抄一份。
+## 四、秘密、证书与权限
 
+- 密码、令牌、私钥、签名证书、keystore、Play 服务凭据及其他凭据**不得通过 QQ 传输**，也不得进入 Git、Issue、PR、日志、截图或 Artifact。
+- 所需秘密和证书由 owner 在 **GitHub Secrets / Environments** 中配置并授权。贡献者只说明条目名称、用途和最小权限，不索取明文。
+- 现有 Android 签名密钥由平台开发者在首次正式发布前一次性交付 owner：keystore 本体装进加密压缩包并走私密邮件，解压口令走另一条渠道。owner 写入 `release` Environment Secret 后删除本地明文，并保留离线备份；此后不得再通过仓库、PR、Issue、Actions 日志或群聊传输 keystore 本体、base64 或口令。
+- PR 及来自 fork 的无签名构建不得读取发布秘密。发现泄露时立即停止相关工作流，并通过安全渠道通知 owner 轮换凭据。
+- **Qobuz 自用客户端例外**：当前 Android 软件仅供自用、无上架计划，Qobuz 请求所需 `app_id` / `app_secret` 可作为接口常量记录在指定配置文件中，不按 Android 签名密钥处理，也不单独作为 PR 阻断项。用户 Token、Cookie、账号数据、GitHub Token 和其他服务凭据不在例外内。
 
+## 五、文件与构建产物
 
-## 4. 缓存边界（不要另造缓存）
+二进制默认不直接进入 Git；仅本节白名单内的 Android 原生库与运行时资产可按普通 Git 对象入库。路径与类型必须同时命中，新增单文件不得超过 **90 MiB（94,371,840 字节）**。
 
-| 名字 | 用途 | 谁用 |
+### 5.1 允许入库的白名单（owner 于 2026-11-25 批准）
+
+| 路径 | 内容 | 单文件上限 |
 |---|---|---|
-| `SimpleCache` / `CacheDataSource` | 流媒体播放分片缓存 | `MediaPlayerBackend` 播放 |
-| `CacheService` | API 响应 / 歌词 / 播放列表文本 | 请求层 |
-| `_cacheDir` | 下载临时文件、封面临时文件 | 下载 |
-| 最终下载文件 | 用户下载结果 | MediaStore / 下载目录 |
+| `android-native/app/src/main/jniLibs/arm64-v8a/*.so` | 自编 / 抽取的原生库（ffmpeg 七件套、`libffmpegkit*`、`libc++_shared`、`libtaglib`、`libtemari`、`liboboe`） | 90 MiB |
+| `android-native/wrapper-lite-app/app/src/main/jniLibs/arm64-v8a/*.so` | QEMU 可执行文件 `libqemu_x86_64.so` | 90 MiB |
+| `android-native/wrapper-lite-app/app/src/main/assets/guest/**` | QEMU guest 资产 `initramfs.dat` / `vmlinuz` / `data.empty.dat` | 90 MiB |
+| `android-native/wrapper-lite-app/app/src/main/assets/lib/**` | aarch64 依赖库 | 90 MiB |
+| `android-native/wrapper-lite-app/app/src/main/assets/qemu-fw/**` | QEMU firmware / keymaps | 90 MiB |
+| `android-native/wrapper-lite-app/assets-src/data.empty.img` | 生成 `data.empty.dat` 的空白 ext4 源镜像 | 90 MiB |
 
-- 播放缓存**只服务流媒体播放**；下载绕开它（不读、不写、不建下载分片缓存）。
-- 播放列表 `/media.m3u8` **不缓存**（URL 带一次性 nonce）；`init` / `seg/{n}` 用
-  `ApplePlaybackServer.cacheKeyFor()` 给的稳定 key，且 key 必须带档位
-  （`apple:{adamId}:{tier}:v2:init|seg:{n}`）。
-- 下载文件 key 独立：`apple:{adamId}:{variantGroup}`。播放不依赖下载文件，下载不碰播放缓存。
+白名单仅适用于本仓，不得扩展到其他平台；是否改用 Git LFS 或新增路径只能由 owner 决定。
 
-## 5. Apple 实现硬约束
+### 5.2 仍然禁止入库
 
-- 所有 Apple 格式（ALAC / AAC / Atmos）统一由 **ffmpeg 解码**，不走 MediaCodec；
-  Media3 的网络 / 缓存 / HLS / 时间轴 / MediaSession 全部保留。
-- 不用 `MediaDrm`；解密走 Temari（`tmpl_from_json` / `decrypt_sample_ffi` / `tmpl_destroy`）。
-- `libtemari.so` 必须带 `SONAME=libtemari.so` 与 `-Wl,-z,max-page-size=16384`，
-  否则 `libannietemari.so` 的 `dlopen` 会找构建机绝对路径、真机必失败。
-- 固定 key `P000000000` **只用于 segment 0**；`/key` 不接受它，随包内置
-  `assets/apple_fixed_key.json`。
-- 解密后的样本长度不变；交给 ffmpeg 前不要改长度。
-- ALAC 的位深 / 采样率从 `EXT-X-MEDIA` 读，**不要**从 `audioTraits` 猜。
-- `/parse/song` 没有国家参数，不跟随选中的国家。
-- 档位缺失统一走 `resolveAppleVariantWithFallback`（超高解析 → 无损 → AAC 256）；
-  Atmos 不参与 ALAC/AAC 的降级链。
-- 本机 HLS 代理地址是**一次性**的（每次 `start()` 换端口）：**禁止缓存复用**，
-  Apple 每次切歌都必须真实走一遍 `start()`。
-- 播放失败兜底只重试一次（清缓存 + 强制重解析），仍失败自动跳下一首。
+- `.jks`、`.keystore`、`.p12`、`.p8`、`.mobileprovision` 及其他签名材料。
+- APK、AAB、DMG、ZIP 安装包；产物只走 Actions Artifact 或 Draft Release。
+- Token、Cookie、账号配置、`local.properties`、含秘密的配置、构建缓存和大型媒体样本。
+- 来源不明、无版本与构建来源记录的第三方运行时。
 
-## 6. 构建 / 装机
+### 5.3 二进制边界检查与轻审原则
 
-```powershell
-# workdir: D:\AnnieMusic\android-native
-& .\gradlew.bat :app:assembleDebug --console=plain
-& "D:\ANSSDK\platform-tools\adb.exe" install -r app\build\outputs\apk\debug\app-debug.apk
-```
+1. 新增单文件 > 90 MiB，或路径不在白名单内，仍须调整。
+2. 白名单内的 `.so` 应对应 `android-native/native/**` 下的构建脚本，或 PR 中记录的外部来源。
+3. 自编产物以「构建脚本 + 补丁集 + 提交 SHA」追溯；抽取的第三方二进制记录原始 AAR / 上游项目、版本与 SHA256。
+4. 二进制信息可写在 PR 正文，也可由 PR 链接仓内 AI 生成的溯源清单；至少包含来源、版本与 SHA256，不限定人工排版。
+5. 电狗对清单完整性、版本判断和验证结论负责；owner 只做存在性检查与必要抽查，不默认逐项重算全部哈希或重复审计。
+6. 白名单文件允许使用普通 Git 对象，不要求也不建议改用 Git LFS。
 
-- **装机别用 `--no-streaming`（push 安装）**：这台机器上它会“Success”但 dex 没完整注册，
-  症状是启动即崩 `ClassNotFoundException: androidx.startup.InitializationProvider`
-  （连 `androidx.core.app.CoreComponentFactory` 都找不到），而 APK 里那些类其实是齐的。
-  遇到这个现象先按坏装处理：改成普通流式安装重来一次，不要急着改代码、也不要 `clean`。
+签名材料与本地配置只保留在开发者本机或 GitHub Secrets / Environments，仓库中不得放入真实凭据。当前仓库没有应用 workflow，不提供构建或发布能力；真实工程落地后必须通过 PR 新增并验证，流程约束见 `RELEASING.md`。保持现有 `LICENSE` 不变，除非另有明确授权与独立 PR。Android 当前自用且无上架计划，不因第三方项目采用 GPL 就默认拒收；仍须保留 LICENSE、NOTICE 和必要版权说明，向他人分发时按对应许可证履行义务。
 
-- NDK：`27.1.12297006`，仅 `arm64-v8a`。
-- Temari（Apple 解密库，Rust）：**Gradle 会自动编**，不需要手工跑脚本。
-  `app/build.gradle.kts` 的 `buildTemari` 挂在 `preBuild` 上，输入是
-  `native/temari/src/` + `Cargo.toml`/`Cargo.lock`/`rust-toolchain.toml`，输出是
-  `app/src/main/jniLibs/arm64-v8a/libtemari.so`；源码没变时 UP-TO-DATE 跳过。
-  - 有 cargo → 交叉编译；**没 cargo 但仓库里有 `.so` → 跳过 + WARN**（照样出包）；
-    两者都没有才失败。非 Windows 跳过该任务，用已提交产物。
-  - 手工重编（与 Gradle 等价）：`powershell -ExecutionPolicy Bypass -File android-native\native\temari\build-android.ps1`
-    （macOS/Linux 用同目录的 `build-android.sh`，需 `ANDROID_NDK_HOME`）。
-  - **产物 `libtemari.so` 是入库的**：改了 Rust 源码重编后要把它一起提交，
-    否则没装 Rust 的人会拿到旧实现。详见 `native/README.md`。
+## 六、Android 工程规则索引
 
-### 6.1 本地单元测试（JVM，改完就跑）
+本仓已落地真实 Android 工程：`android-native/`（AnniePlayer）与 `android-native/wrapper-lite-app/`（WrapperLite）。第五节末段「当前仓库没有应用 workflow」一句已被 `RELEASING.md` 第 1 节描述的 PR 无签名构建取代，对应 workflow 为 `.github/workflows/android-ci.yml`：只读源码、不使用任何 Secret、不建 tag、不建 Release，产物标注为无签名并记录 SHA256。
 
-```powershell
-# workdir: D:\AnnieMusic\android-native
-& .\gradlew.bat :app:testDebugUnitTest --console=plain
-# 只看结果：app\build\test-results\testDebugUnitTest\*.xml
-```
+工程内部规则不在本文件，统一见 **`android-native/AGENTS.md`**：禁止写注释、代码分层与依赖方向、缓存边界、Apple 实现硬约束、页面栈与返回手势、Compose 写法红线、构建与本地单测命令。动手改 `android-native/` 之前必须先读那一份（在该目录下工作时它会被自动加载）。
 
-- 位置：`app/src/test/java/...`（纯 JVM），夹具放 `app/src/test/resources/fixtures/`。
-- **能测就测，改完就跑**；不比编译多花几秒，但能挡住「编译通过、行为错」的那一类。
-- 测试里**不许**碰 Android 类（`MediaStore` / `ContentResolver` / `MediaMetadataRetriever` / `Context`），
-  一碰就 `not mocked` 直接红。碰到这种依赖，说明这段逻辑该往下游拆。
-
-**测什么**（这些已经证明值得测）：
-
-| 类别 | 例子 |
-|---|---|
-| 字节级编解码 | `AnnieTag` 各格式的读写往返（还断言「音频字节一个都没变」） |
-| 解析器 | master m3u8 / media playlist / `resolveAppleVariantWithFallback` |
-| 纯映射 | `TagMapper.ofSong()`（下载到底会写哪些字段）、平台响应 → `Song` |
-| 键构造 | `AppleManifest.*Key()`（播放与下载必须一字不差，否则缓存不命中） |
-| 文本处理 | LRC / 逐字歌词 / 文件名拆歌手 |
-
-**两条硬要求**：
-
-1. **跨实现校验**：只做「自己写自己读」等于自证循环。写完把文件留在
-   `app/build/annietag-verify/`，再用 **PC 上的 ffprobe** 反向读一遍：
-   ```powershell
-   & ffprobe -v error -show_entries format_tags -of default=noprint_wrappers=1 app\build\annietag-verify\xxx.m4a
-   # Ogg/Opus 的标签在 stream_tags 里，不在 format_tags
-   ```
-   已靠这一步抓到 10 个真 bug（FLAC `PICTURE` 是大端、ID3 `USLT` 语言码要 `und`、
-   Ogg 的 framing bit 与整页 CRC、TTA 用 APEv2 不是 ID3、DSDIFF 首个 chunk 从 16 开始……）。
-2. **断言红了先怀疑实现**：不许为了让测试变绿去放宽断言。确实要改断言时，
-   在测试注释里写清「为什么原来的期望是错的」。
-
-**为了让代码可测**：把「不碰 Android、不碰网络」的纯逻辑抽出来单独放
-（例：`TagMapper.ofSong()`、`AppleManifest` 的键构造函数），
-不要在 Composable / ViewModel / 下载器里内联一段只能上真机验的字符串拼接。
-
-## 7. 页面栈与返回手势
-
-### 7.1 四层结构
-
-| 层 | 承载 | 唯一事实来源 | 返回语义 |
-|---|---|---|---|
-| **L0 Tab** | `AppTab.Home / PlaylistParse / Library` | `AppShellState.selectedTab` | 非默认 tab 时退回主页 |
-| **L1 页面栈** | `UiState.pageStack: List<AppRoute>`，13 种 Route | `UiState.pushRoute / popRoute / clearRoutes` | 弹栈顶 |
-| **L2 模态层** | `UiState` 的布尔 + `Overlay.RENDER_ORDER` | `core/routing/OverlayStack.kt` | 关最上层的那个 |
-| **L3 页内形态** | 详情页自己的 tab / 多选（如歌手的「全部歌曲」） | 页面内部状态 | 先回上一层形态，不出栈 |
-
-L3 **不是**独立页面，不许为它 `pushRoute`；它压在 L1 的某一页**内部**。
-
-### 7.2 出栈只有一条路径
-
-```
-系统返回 → AppShell 唯一的 PAGE 处理器（handleBack == BackTarget.PAGE）
-        → PageCloseRelay.requestCloseTop()
-        → 栈顶页注册的 requestClose（播滑出动画）
-        → popRoute()
-```
-
-- **栈内页面禁止自己 `BackHandler { popRoute() }`。** 那是第二条出栈路径，会造成
-  「返回键失效 / 关错页 / 下层页面没动画」。这一整类 bug 都源自重复的出栈权。
-- 顶栏返回箭头 / 关闭按钮**必须**用 `LocalOverlayFrame` 给的 `requestClose`，
-  不许直接传 `onClose` / `popRoute`（那样会硬切，没有滑出动画）。
-
-### 7.3 栈内页面的写法
-
-- 一律用 `LocalOverlayFrame(onClose = { popRoute() }) { requestClose -> ... }` 包。
-  它提供 scrim、150ms 滑入/滑出、`closing` 防重入，并**自动把自己的 `requestClose`
-  注册进 `PageCloseRelay`**。
-- 页面**没有**页内状态回退需求时：**完全不声明 `BackHandler`**。
-- 有页内状态回退需求时，只能这样写：
-
-  ```kotlin
-  BackHandler(enabled = isTop && 本页条件) { 只改本页状态；绝不调 popRoute() }
-  ```
-
-- `isTop` 的实参**必须是宿主的 `localTop`**（= 栈顶 **且** `pageCanConsumeBack`），
-  不许传裸 `isTop`。传裸值会让「⋮ 面板 / 播放页开着」时页面仍吃返回，在浮层背后把自己关掉；
-  被压在下面时更会抢走上层页面的返回，表现成「返回键毫无反应」。
-
-### 7.4 新增浮层（L2）必须做三件事
-
-`OverlayVisibilityFlags` 现在与 `BACK_RULES` 一一对应、**覆盖全部 20 种可见浮层**
-（含两个不在 `UiState` 里的搜索页状态：`searchSelectionOverlay` / `searchSelection`）。
-新增浮层时三件都要做，缺一件就会退化成「靠注册顺序兜住」：
-
-1. **加可见性状态**：优先加在 `UiState`；状态不在 `UiState` 里的（如 `TranslatePicker.visible`、
-   `SearchScreenState.sourcePickerVisible`、`SearchSelectionViewModel.state`）就在
-   `toOverlayFlags` 加一个入参，由宿主传。
-2. **登记进模型**：`OverlayVisibilityFlags` 加字段 + `BACK_RULES` 加规则。
-   **位置一律排在 `PAGE` 之上** —— 浮层出现时详情页不许再吃返回，
-   否则页面会在面板背后把自己的子标签 / 多选状态悄悄改掉（表现为「返回键没反应」）。
-3. **声明在 `pageStack` 之后**，并 `BackHandler(enabled = visible) { onClose() }`。
-
-- 为什么 2 和 3 都要：**2 决定裁决**（`handleBack` 返回什么、`localTop` 是否为 true）；
-  **3 决定实际互斥**（逆向派发谁先收到）。两者取其一都能工作，但只做 3 就是「靠顺序巧合」，
-  只做 2 则浮层可能被页面盖住 / 抢返回。
-- `toOverlayFlags()` 在 `AppShell` 里**只算一处**（`val overlayFlags = ...`），
-  根返回 / 搜索态返回 / 页面栈返回共用同一份。**不许在各处再单独算一遍** ——
-  以前就是散着算，漏传那两个非 `UiState` 开关，导致 `handleBack` 以为「没有浮层」。
-- 等价手段是开头 `if (!visible) return`（整段不组合，handler 也就不存在）。
-  **选一种即可**，不要既早退又给 `enabled`，那只会让「到底谁在吃返回」更难查。
-- 浮层**不许**无条件注册 `BackHandler { }`（连 `enabled` 都不写）。
-
-### 7.5 注册顺序即优先级
-
-`OnBackPressedDispatcher` 按**注册逆序**派发，且**跳过未启用的回调**。所以：
-
-- 绘制顺序 = 组合顺序；组合顺序 = 注册顺序；注册顺序的逆序 = 返回优先级。
-- 想让 A 比 B 先收到返回，就让 A **声明在 B 之后**。这条只对同层（同一父节点内）成立。
-- 优先级表只在 `core/routing/OverlayStack.kt` 里写一次（`BACK_RULES` +
-  `RENDER_ORDER`），**不许在别处再硬编码一份顺序**。`handleBack` 是纯函数，不依赖
-  ViewModel / Composable。
-
-### 7.6 `PageCloseRelay` 的使用约束
-
-- 它是**进程级单例的有序列表**，"列表尾部 = 栈顶"。
-- 注册必须**每页只做一次**：`rememberUpdatedState(requestClose)` + `DisposableEffect(Unit)`。
-  - 不许把 `requestClose` 当 `DisposableEffect` 的 key。它通常是每次重组新建的 lambda，
-    key 变化会「撤销 + 重新注册」，等价于把该页挪到队尾 —— 一个被压在下面的页面只要重组一次，
-    就抢走「栈顶」身份，返回时关错页面。
-- 出栈时 `unregister` **只移除自己那一项**，不许把整个列表清空。
-  清空会让父页找不到自己的注册者，退化成 `popRoute()` —— 表现为「第一次返回有滑出动画，
-  从子页退回父页后再返回，父页瞬间消失」。
-
-### 7.7 页面内的全屏面板必须交给宿主渲染
-
-- 页面**不许内联**渲染「需要盖住迷你播放条 / 底栏」的全屏面板。
-  内联就等于画在页面内部，而迷你条与底栏都在页面之上 → 面板底部（音质档位、取消按钮）
-  会被压住，表现为「面板能开，但最下面点不到」。
-- 页面侧唯一入口是 `DetailQualityPickerHost`（`LocalDetailQualityPickerHost`）：
-  页面只**提供内容**，由 `AppShell` 在 `AppBottomBar` **之后**统一渲染
-  （`detailPickerHost.slot?.invoke()`，对应 `Overlay.QUALITY_PICKER_*` 层）。
-- 已接入：专辑 / 歌手 / 歌单详情、Qobuz 详情。新加「多选批量下载」的页面必须走这条路。
-- 无宿主时（独立整页版、预览）退化为内联渲染是**正确**的，保留这个 fallback。
-- 现状是两套并存，**有意为之、暂时不统一**：
-  - 单曲下载（⋮ → 下载）走 `UiState.pickerVisible` + `pickerSong`，`AppShell` 直接渲染；
-  - 选择浮层批量下载走 `DownloadOrchestrator.batchPickerVisible`，`AppShell` 直接渲染；
-  - 页面内批量下载走页面本地状态 + 宿主槽位。
-  统一状态源属于另一个量级的改动（会动三个页面 + 选择浮层 + 编排器），现在没有 bug 收益。
-
-### 7.8 宿主槽位的四条纪律
-
-1. **只在打开时抢占槽位**：`if (open) host.show(owner, panel)`；关闭时不写。
-2. **关闭时不清槽**：保留内容，让面板自带的淡出动画播完（`QualityPickerSheet` 的 `fade`）。
-3. **页面退出必须清自己的槽**：`DisposableEffect(owner) { onDispose { host.clear(owner) } }`。
-   `clear` 只在 `owner` 是自己时才清，否则会误清上层详情页的面板。
-4. **可见性标志必须在组合期读一次**：
-
-   ```kotlin
-   val pickerOpen = st.pickerVisible        // 组合期读 → 建立依赖
-   SideEffect { if (pickerOpen) host.show(owner, panel) }
-   ```
-
-   只在 `SideEffect` 块里读的话，`false → true` 不会触发本页重组 → `SideEffect` 不重跑 →
-   槽位永远不写 → **第一次点下载什么都不弹**，要等下一次无关重组（例如退出多选）才把面板
-   「迟到」地挂上去。这就是「第一次不弹、返回之后突然冒出来、第二次正常」的标准成因。
-
-### 7.9 菜单抽屉及其子页
-
-**层级**：抽屉本身是 L2；从抽屉打开的每一个页面**也都是 L2 浮层**，进的是 `UiState` 的布尔，
-不进 `pageStack`。菜单子页永远不会出现"L1 页面栈"这一层。
-
-**声明**：全部子页声明在 `MenuDrawer` **之后**（`AppShell` 内），因此天然盖住抽屉。
-点菜单项**不关抽屉**：关掉子页后仍停在抽屉里，可连续改多项设置。
-唯一例外是「清除缓存」——它先关抽屉再弹窗，因为那个弹窗要求抽屉退场。
-
-**互相关系**：子页之间**互斥、不压栈**，同一时刻只有一个是可见的。
-唯一有父子语义的是「更多设置 → DSD 输出」，表达方式是**两个并列布尔** +
-`BACK_RULES` 里 `DSD_OUTPUT` 排在 `MORE_SETTINGS` 之前，不引入第三层状态。
-
-**新增一个菜单子页 = 改满 8 处**（这是完成定义，不是建议）：
-
-| # | 位置 | 漏掉的症状 |
-|---|---|---|
-| 1 | `UiState` 布尔字段 | 编译错误 |
-| 2 | `copyWith` 参数 | 编译错误 |
-| 3 | `copyWith` 里的构造实参 | 任何一次 `copyWith(...)` 把它重置为 `false`（表现为「刚打开就自己关掉」） |
-| 4 | `UiViewModel.setXxxVisible` | 无法打开 |
-| 5 | `UiState.toOverlayFlags` 映射 | `handleBack` 认为没有浮层 → 返回穿透到下层页面 |
-| 6 | `OverlayVisibilityFlags` 字段 | 编译错误 |
-| 7 | `BackTarget` + `BACK_RULES` 规则 | 返回键被下层消费：关错页或毫无反应 |
-| 8 | `AppShell` 声明位置 + `MenuDrawer` 回调 + `hideBottomBar` | 打不开 / 被抽屉盖住 / 迷你播放条压住子页底部 |
-
-**顺序**：`BACK_RULES` 的次序必须与 `AppShell` 的声明顺序**互为逆序**
-（声明越晚 = 返回越先，见 7.5）。新页面按「最后加入 = 最后声明」插到 `AppShell` 末尾，
-同时在 `BACK_RULES` 里插到与之对应的位置 —— **不是追加到规则表末尾**。
-两处不一致时，浮层互斥期看不出来，一旦两层叠加就是「返回关错页」。
-
-**`hideBottomBar`**：每个子页都必须登记，否则迷你播放条会压在全屏子页底部，
-表现为「页面最下面的按钮点不到」。这一项目前仍是逐个枚举，新增时手加。
-
-**收尾自查**：`AppShell` 声明顺序、`BACK_RULES` 顺序、`hideBottomBar` 列表 —— 三者对齐才算出完。
-
-## 8. Compose 写法红线
-
-- **状态的读取位置决定它能不能触发重绘。**
-  `SideEffect` / `LaunchedEffect` / `DisposableEffect` 块**内部**的读取**不算**组合依赖。
-  要「状态变了界面跟着变」，就在组合期读一次（哪怕只是 `val x = state` 赋给局部量）。
-  排查「改了状态但界面没反应」时，先找这个。
-- **`clickable(enabled = false)` 在 Compose 里依然占据命中测试**，不能用它实现「隐藏就不挡点击」。
-  要让浮层完全不参与，就让整段不组合（例如 `if (!visible && fade == 0f) return`）。
-  反面教材与完整推导见 `widgets/QualityPicker.kt` 里「全屏浮层不得吃掉下层点击」那段注释。
-- 全屏浮层的遮罩若常驻，会吃掉下层所有按钮的点击（顶栏、搜索框、下拉、⇄ 全部点不动）。
-  判据同第一条：不参与命中测试的唯一手段是**不组合**。
-
----
-
-## 99. 待办（临时进度，做完即删）
-
-> **本节违反「AGENTS.md 只放规则」的原则，是有意为之的例外**：这些上下文一旦压缩就丢，
-> 又不能从代码里反推（做了一半、边界条件、已定但没落地的决定）。
-> **做完一项删一项；全部完成就把整个第 99 节删掉。不写已完成项——写了就成了坟场。**
-
-### 99.2 候选率集合：加兜底 + 按"信设备"处理 192k 上限
-
-现状（`MediaPlayerBackend.kt` 1456 行附近）候选率 = 平台可建 ∪ 设备声明 ∪ codec ∪ 计划 ∪ 用户选，
-**没有"标准档位兜底"** —— 设备沉默时（部分 USB DAC 的 `getSampleRates()` 不可靠）拿不到 384k。
-
-1. 加固定兜底列表：44.1 家族 + 48 家族到 768k，并进那个 `buildList`
-2. **`MAX_LEGAL_PCM_RATE = 192_000`（`DsdOutput.kt`）按 A 处理**：信设备，不再用 `AudioFormat`
-   合法上限卡死（它把 352.8k 永久灰掉）。建轨失败的率交给 `failedRates` 记住并降档
-3. `AAUDIO_PROBE_RATES` 硬编码 5 档（44.1/48/88.2/96/192），**没有 384k**。改成跟随候选率，
-   但**懒探测**：启动只探常用档，其余用到才探（`probedExclusive == null` 本就允许试，
-   行为不会漏，只是面板少一行）
-
-### 99.3 换设备的一次性提示（Snackbar）
-
-已做：设置页**常驻**那一行（`OutputAdvice` + `OutputAdviceTest`）。没做：设备变化时的一次性提示。
-
-接 `AudioOutputController.onDevicesChanged` → 一条一次性 UI 事件。文案已定：
-
-| 事件 | 文案 |
-|---|---|
-| 插 USB DAC | `已连接 USB DAC`（独占仍不可用则追 `独占仍不支持`） |
-| 插有线 | `已切换到有线` |
-| 拔掉回扬声器 | `已回到扬声器 · 仅 48 kHz` |
-| 当前通路在新设备失效 | `独占在新设备上不生效 · 开关保持开启` |
-
-**最后一句必须有** —— 开关是"意愿"，不随设备回滚，要明确告诉用户没被重置。
-
-### 99.4 换设备的音频行为（用户说"还有别的要求"，**等他提**）
-
-已知代价：`onDevicesChanged` 连着 `_reloadCurrentSource()` 两次（当场一次、700ms 重探后又一次），
-每次重建都要重新解析 URL + 重新 configure；暂停中也重建（白花一次）。**先别动，等需求。**
-
-### 99.5 文档同步
-
-`AAUDIO-HANDOFF.md` 仍按"透明 / 调音"两模式描述，第 1、2 节的链路图与文件表已过时。
-矩阵重构后要改：链路图、`OutputPath` 说明，并把 `bitPerfectMixer` 那条标成"已删除"。
-
-### 99.6 未验证项（有设备才能验）
-
-- **AAudio 通路的单曲循环**：`AaudioSink.flush()` 里补 `play()` 那个修复只在**系统通路**验过
-  （两台机都拿不到独占）。等小尾巴 / 换 ROM 后补验。
-- **`resetprop aaudio.mmap_policy 3`**：PLQ110 有 root，还没试。这是唯一能区分
-  "MMAP 是 ROM 禁的还是 HAL 不给"的手段。
-- **JM13（或任何 DAP）的 `PROPERTY_OUTPUT_SAMPLE_RATE` 是否动态**：见 99.7。
-
-### 99.7 「按源采样率输出」= 完全交给系统（**已决策，不再是待办**）
-
-**决策**：开关打开就**一律按源率建轨、不做任何预转换**，不看系统主率。
-
-```kotlin
-!tuned && followSourceRate && sourceRate > 0 -> 0
-```
-
-**为什么砍掉"源率 == 主率"那个智能判据**（曾经实现过 `sourceRateIsSafe`）：
-
-- 它依赖 `PROPERTY_OUTPUT_SAMPLE_RATE`，而那是 `AudioManager` 的**静态属性**
-  （primary output 的默认率，不是此刻实际率）。
-- 做了动态跟随的 DAP（[飞傲官方 FAQ](https://www.fiio.com/newsinfo/69479.html) 明确说
-  **第三方 App 也不 SRC**）那个属性照样报 48000 → 判据把"系统本来能原样"判成"会被转"
-  → 替系统白转一遍，**废掉设备能力**。
-- 而 App 层**事后测不到**系统是否 SRC（`getTimestamp().framePosition` 按 track 自己的率计帧），
-  所以"先试再兜底"也不成立。
-
-**通用教训**：凡是"替用户判断设备能力"的智能逻辑，都会误伤一部分设备，而用户无法绕过。
-给开关 + 写清风险，比给一个自作聪明的判定更可靠。这条值得推广到别处。
-
-文案（设置页）：
-`按源率建轨、不做预转换；若系统固定主率，重采样会由系统完成，质量低于本应用`
-
-**三态方案（Off/Auto/Force）已否决** —— 有了 Force 语义就不需要 Auto，两态足够。
-
-**JM13 具体行为仍未实测**（搜到的都是 X5 / M11S / M21 / R9）。插上后要确认：
-1. `PROPERTY_OUTPUT_SAMPLE_RATE` 是否随曲目变（决定这个开关在它上面是"必要"还是"多余"）
-2. 有没有给第三方 App 开 `AUDIO_OUTPUT_FLAG_DIRECT` 端口
-3. Android 版本（决定 AAudio 独占那条路能不能走）
-
-### 99.8 等设备：飞傲 KA13（小尾巴）+ JM21（DAP）
-
-**用户已下单，到货前不写 USB 独占 / DoP。** 下面这份清单是前面所有推断的验证项 ——
-推断已经落到代码里（见 C 节），等真机能验的就只有这些。
-
-**到货前不要再动**：`configure.sh` 的 `dst`（一行、零依赖，但没样本可验）、USB 直连、
-DoP packer。
-
-#### A. KA13（USB 小尾巴）—— 验「高率到底能不能到」
-
-按顺序做，前一项决定后一项还有没有意义：
-
-1. `AudioDeviceInfo.sampleRates` 声明了什么？有没有 384k / 768k / 352.8k？
-   **只是声明**，不代表跑得动。
-2. `platformCanBuildRate(384000)` / `(352800)` 返回什么？
-   **等价于问「这台系统的 framework 有没有放开 192k 上限」** —— 返回 false 就到此为止，
-   除 USB 直连外没有别的路。
-3. 若能过第 2 步：`SystemSinkProbe` 建不建得出 352.8k/384k 的轨？
-   看「输出能力（实测）」页的「系统建轨实测（>192k）」那一行。
-4. AAudio EXCLUSIVE 在 352.8k / 384k 上能不能开？
-   现在 `AAUDIO_PROBE_RATES` 只到 192k 五档，要临时加两档才看得见。
-   **这一步决定 DoP 有没有戏**：EXCLUSIVE 拿得到、且回读率与请求一致 ⇒ DoP 可以走 A 路。
-5. KA13 的 DSD 能力（DoP / native）在 Android 侧**看不到** —— 那是 DAC 描述符里的信息，
-   只能靠 USB 直连读 `FORMAT_TYPE` 才知道。别指望探针能给答案。
-
-#### B. JM21（DAP）—— 验「系统通路保不保真」
-
-1. `PROPERTY_OUTPUT_SAMPLE_RATE` 是静态 48000 还是随曲目变？（99.7 的核心问题）
-2. 放一首 44.1k、一首 96k：系统通路按源率建轨后，`actualRate` 真的跟着走吗？
-3. 有没有 `AUDIO_OUTPUT_FLAG_DIRECT` 给第三方 App？（决定 mixer 会不会 clamp DoP 帧）
-4. AAudio EXCLUSIVE 能不能拿到？回读率一致吗？
-5. **拿海贝音乐在同一台机器上试 DSD native**：
-   - 海贝能跑 ⇒ HAL 对第三方开放了那条路，值得逆向研究它走哪条
-   - 海贝也跑不了 ⇒ 那条路只给飞傲自家 App，对我们等同不存在
-6. 若 DoP 走系统通路能正常出声 ⇒ 说明通路保真，DoP packer 优先级最高
-
-#### C. 已就绪（到货即可直接验，不用再改）
-
-- `SystemSinkProbe`：真建轨探测 + `(deviceId, route, rate, depth)` 缓存 + 设备变更失效
-- 「输出能力（实测）」页的「系统建轨实测（>192k）」行
-- `dsdMaxPcmRate(probedMax)`：上限按实测取，不再钉死 176.4k
-- `dsdModeAvailability` 的 `exclusiveReady` 语义已改成「有一条逐字节保真的独占流」，
-  **不再绑 USB 独占**（DoP 实现时不会误绑）
-- DSD → PCM 抽取已由 r8brain 做（native 只解到 352800，`keepSourceRate`）
-- `AudioFormat` 192k 上限已抽成 `AUDIO_FORMAT_MAX_RATE`，`>192k` 才走建轨验证
-
-#### D. 两条路怎么选（按实测二选一）
-
-- **A 路可行**（EXCLUSIVE 回读保真 / JM21 系统通路保真）→ 做 DoP packer（~100 行 native），
-  覆盖小尾巴 + DAP，不需要 USB 直连
-- **A 路不可行** → 才考虑 USB 直连（libusb + `UsbDeviceConnection.getFileDescriptor()`，
-  ~1000 行，且要先验 SELinux 放不放 `USBDEVFS_SUBMITURB`）
-
-**海贝逆向产物（`D:\haibei`）的用法**：只借「哪些参数必须交给用户」
-（`uac_dsd_max_sample_rate` / `uac_dsd_compensate` 这两个 `native_set*` 旋钮），不抄代码。
-
-
+二进制溯源清单：`android-native/BINARY-PROVENANCE.md`（主程序）与 `android-native/wrapper-lite-app/BINARY-PROVENANCE.md`（WrapperLite），逐文件列来源、版本与 SHA256。
