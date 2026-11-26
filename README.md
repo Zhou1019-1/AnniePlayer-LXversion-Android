@@ -240,6 +240,8 @@ adb install -r app\build\outputs\apk\debug\app-debug.apk
 
 - **Temari（Rust）**：`buildTemari` 挂在 `preBuild`，源码未变自动跳过，产物 `libtemari.so` 入库
 - **ffmpeg**：`native/ffmpeg/build-android.sh`（WSL + Linux NDK，约 10 分钟）产出七个 `libav*/libsw*.so`，产物同样入库，克隆后直接出包
+- **release 签名**：必须在 `android-native/keystore.properties` 提供 `storeFile` / `storePassword` / `keyAlias` / `keyPassword`。缺这个文件时 `assembleRelease` **直接失败并给出提示**，不会回退到 debug 签名；本地调试请用 `assembleDebug`
+- **二进制溯源**：所有入库的 `.so` / `.jar` / 运行时资产逐个记录来源、版本与 SHA256，见 [`android-native/BINARY-PROVENANCE.md`](android-native/BINARY-PROVENANCE.md) 与 [`wrapper-lite-app/BINARY-PROVENANCE.md`](android-native/wrapper-lite-app/BINARY-PROVENANCE.md)
 - **WrapperLite**：独立工程，`cd wrapper-lite-app && .\gradlew.bat assembleDebug`
 - 内存吃紧的机器请单任务跑（`--max-workers=1`），并行会把提交内存打满
 

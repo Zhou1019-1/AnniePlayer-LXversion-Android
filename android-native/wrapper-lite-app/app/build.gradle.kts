@@ -114,3 +114,20 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
+
+tasks.configureEach {
+    val guarded = name == "preReleaseBuild" ||
+        name.startsWith("packageRelease") ||
+        name == "bundleRelease"
+    if (guarded) {
+        doFirst {
+            if (!hasReleaseKeystore) {
+                throw GradleException(
+                    "release 构建必须提供 keystore.properties" +
+                        "（storeFile / storePassword / keyAlias / keyPassword）。" +
+                        "本工程不会回退到 debug 签名；本地调试请用 assembleDebug。",
+                )
+            }
+        }
+    }
+}

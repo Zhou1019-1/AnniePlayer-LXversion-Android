@@ -61,7 +61,7 @@ android {
             signingConfig = if (hasReleaseKeystore) {
                 signingConfigs.getByName("release")
             } else {
-                signingConfigs.getByName("debug")
+                null
             }
         }
     }
@@ -266,3 +266,20 @@ dependencies {
     testImplementation("junit:junit:4.13.2")
 }
 
+
+tasks.configureEach {
+    val guarded = name == "preReleaseBuild" ||
+        name.startsWith("packageRelease") ||
+        name == "bundleRelease"
+    if (guarded) {
+        doFirst {
+            if (!hasReleaseKeystore) {
+                throw GradleException(
+                    "release 构建必须提供 keystore.properties" +
+                        "（storeFile / storePassword / keyAlias / keyPassword）。" +
+                        "本工程不会回退到 debug 签名；本地调试请用 assembleDebug。",
+                )
+            }
+        }
+    }
+}
