@@ -16,6 +16,8 @@
 4. 根据评审意见在原分支继续提交；需要 owner 协助时通过 QQ 联系。
 5. 等待有权限的审阅者处理 PR。贡献者和 AI 不得自行合并，除非获得 owner 对该操作的明确授权。
 
+Android 由电狗（`@chenhaochen66`）担任平台技术负责人。owner 保留 1 次 approval 并轻审合并，只检查摘要、范围、真实验证声明和风险边界；日常技术方案、AI 辅助实现、测试安排和溯源清单由电狗负责，不默认逐行或逐项重复审计。
+
 **所有人和 AI 均不得直推 `main`，不得绕过 PR。未经 owner 明确批准，不得创建/推送 tag 或创建/发布 Release。**
 
 ## 验证要求
@@ -44,6 +46,6 @@ SHA256：<交付产物的 SHA256；无产物则填无>
 ## 安全与文件约束
 
 - 秘密和证书**不走 QQ**，也不进入仓库、Issue、PR、日志或 Artifact。由 owner 配置 GitHub Secrets / Environments；贡献者只提供所需条目名称、用途和最小权限。
-- 二进制默认不进 Git；仅 `AGENTS.md` 第五节白名单内的 Android 原生库与运行时资产可按普通 Git 对象提交，单文件不得超过 90 MiB，且 PR 必须列出每个文件的来源、版本和 SHA256。APK、AAB 及其他构建输出仍通过 Actions Artifact 或 Draft Release 交付。
+- 二进制默认不进 Git；仅 `AGENTS.md` 第五节白名单内的 Android 原生库与运行时资产可按普通 Git 对象提交，单文件不得超过 90 MiB。PR 正文或其链接的仓内溯源清单应记录来源、版本和 SHA256，由电狗负责、owner 抽查。APK、AAB 及其他构建输出仍通过 Actions Artifact 或 Draft Release 交付。
 - 不提交 `.jks`、`.keystore`、私钥、真实环境变量、`local.properties` 或其他本地签名材料；具体忽略规则见 `.gitignore`。
 - 安全问题的沟通方式见 `SECURITY.md`，发布边界见 `RELEASING.md`。
