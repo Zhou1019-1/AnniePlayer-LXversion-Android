@@ -67,7 +67,38 @@
 - 传输层只在平台包里有一份（例：`data/sources/kugou/KugouHttp.kt` 的 `kugouSignedPost` /
   `kugouMid` / `kugouPlainHeaders`）。用途包要发同样的签名请求，**调它**，不要抄一份。
 
+## 4. 缓存边界（不要另造缓存）
 
+| 名字 | 用途 | 谁用 |
+|---|---|---|
+| `SimpleCache` / `CacheDataSource` | 流媒体播放分片缓存 | `MediaPlayerBackend` 播放 |
+| `CacheService` | API 响应 / 歌词 / 播放列表文本 | 请求层 |
+| `_cacheDir` | 下载临时文件、封面临时文件 | 下载 |
+| 最终下载文件 | 用户下载结果 | MediaStore / 下载目录 |
+
+- 播放缓存**只服务流媒体播放**；下载绕开它（不读、不写、不建下载分片缓存）。
+- 播放列表 `/media.m3u8` **不缓存**（URL 带一次性 nonce）；`init` / `seg/{n}` 用
+  `ApplePlaybackServer.cacheKeyFor()` 给的稳定 key，且 key 必须带档位
+  （`apple:{adamId}:{tier}:v2:init|seg:{n}`）。
+- 下载文件 key 独立：`apple:{adamId}:{variantGroup}`。播放不依赖下载文件，下载不碰播放缓存。
+
+## 5. Apple 实现硬约束
+
+- 所有 Apple 格式（ALAC / AAC / Atmos）统一由 **ffmpeg 解码**，不走 MediaCodec；
+  Media3 的网络 / 缓存 / HLS / 时间轴 / MediaSession 全部保留。
+- 不用 `MediaDrm`；解密走 Temari（`tmpl_from_json` / `decrypt_sample_ffi` / `tmpl_destroy`）。
+- `libtemari.so` 必须带 `SONAME=libtemari.so` 与 `-Wl,-z,max-page-size=16384`，
+  否则 `libannietemari.so` 的 `dlopen` 会找构建机绝对路径、真机必失败。
+- 固定 key `P000000000` **只用于 segment 0**；`/key` 不接受它，随包内置
+  `assets/apple_fixed_key.json`。
+- 解密后的样本长度不变；交给 ffmpeg 前不要改长度。
+- ALAC 的位深 / 采样率从 `EXT-X-MEDIA` 读，**不要**从 `audioTraits` 猜。
+- `/parse/song` 没有国家参数，不跟随选中的国家。
+- 档位缺失统一走 `resolveAppleVariantWithFallback`（超高解析 → 无损 → AAC 256）；
+  Atmos 不参与 ALAC/AAC 的降级链。
+- 本机 HLS 代理地址是**一次性**的（每次 `start()` 换端口）：**禁止缓存复用**，
+  Apple 每次切歌都必须真实走一遍 `start()`。
+- 播放失败兜底只重试一次（清缓存 + 强制重解析），仍失败自动跳下一首。
 
 ## 6. 构建 / 装机
 
@@ -82,7 +113,13 @@
   （连 `androidx.core.app.CoreComponentFactory` 都找不到），而 APK 里那些类其实是齐的。
   遇到这个现象先按坏装处理：改成普通流式安装重来一次，不要急着改代码、也不要 `clean`。
 
-- NDK：`27.1.12297006`，仅 `arm64-v8a`。
+- NDK：`27.1.12297006`，仅 `arm64-v8a`。CMake `3.22.1`（两个工程）—— CI 与真机之外的机器都按这两个版本装。
+- **JDK 不在仓库里固定**：`gradle.properties` 不写 `org.gradle.java.home`（它曾是 `D:\ANS\jbr`
+  这种本机绝对路径，公开仓库里既不可复现也会让 Linux CI 直接失败）。本地让 `JAVA_HOME` 指向
+  JDK 17+ 即可；这台机器是 `D:\ANS\jbr`，PATH 上的 `java` 是 11，**不要**指望它，启动脚本认
+  `JAVA_HOME`。确实要强制某台机器的 JVM，写进 `%USERPROFILE%\.gradle\gradle.properties`，不要提交。
+- **`gradlew` 的执行位**：`android-native/gradlew` 与 `wrapper-lite-app/gradlew` 在索引里是 755，
+  Linux/macOS CI 直接 `./gradlew` 就能跑。Windows 上无所谓。
 - Temari（Apple 解密库，Rust）：**Gradle 会自动编**，不需要手工跑脚本。
   `app/build.gradle.kts` 的 `buildTemari` 挂在 `preBuild` 上，输入是
   `native/temari/src/` + `Cargo.toml`/`Cargo.lock`/`rust-toolchain.toml`，输出是

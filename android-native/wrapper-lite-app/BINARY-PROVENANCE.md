@@ -480,3 +480,21 @@ git ls-files android-native/wrapper-lite-app |
 | `libz.so.1.3.2` | `zlib` | `1.3.2` |
 | `libzstd.so.1` | `zstd` | `1.5.7-1` |
 | `libzstd.so.1.5.7` | `zstd` | `1.5.7-1` |
+
+## 九、非 `.so` 二进制（Gradle wrapper 与应用图标）
+
+不属于 `AGENTS.md` §5.1 白名单的两类文件，逐项列出以承担「来源 + 版本 + SHA256」的追溯义务；
+白名单补充申请见 PR 说明。
+
+| 文件 | 大小 | SHA256 | 入库 commit |
+|---|---|---|---|
+| `gradle/wrapper/gradle-wrapper.jar` | 52.4 KiB | `16caeaf66d57a0d1d2087fef6a97efa62de8da69afa5b908f40db35afc4342da` | `3ad15fd` |
+| `app/src/main/res/mipmap-hdpi/ic_launcher.png` | 2.3 KiB | `ac0b2c027804f16222f5a209ebc411de99cf4d1f91d84639a578d44324b2bac2` | `3ad15fd` |
+| `app/src/main/res/mipmap-mdpi/ic_launcher.png` | 1.5 KiB | `f1dac78f7a516b09e3d14de0ed4cff4151b6224e29c5a23e6f04cefb8d51af3a` | `3ad15fd` |
+| `app/src/main/res/mipmap-xhdpi/ic_launcher.png` | 3.2 KiB | `e8a6da41b46024b54f6fa4d4a8f08e1f1066303f2adc13f0c491eda27db934f9` | `3ad15fd` |
+| `app/src/main/res/mipmap-xxhdpi/ic_launcher.png` | 4.9 KiB | `de6b01e5c06ed9607a5181f899f2028aa2856dca091575c52a69d51536eddb47` | `3ad15fd` |
+| `app/src/main/res/mipmap-xxxhdpi/ic_launcher.png` | 6.7 KiB | `69e035eb4202623bbf78ab67755c70b83541beb41932dd15c77082db93afcca6` | `3ad15fd` |
+
+- `gradle-wrapper.jar`：Gradle 官方 distribution 的 wrapper，版本见 `gradle/wrapper/gradle-wrapper.properties`
+  （`9.3.1`），与主程序那份 **SHA256 完全相同**，可互为对照。
+- 5 个 `ic_launcher.png` 是 WrapperLite 的启动图标（本应用作者自制），非第三方素材。
