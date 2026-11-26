@@ -24,14 +24,14 @@ fun parseLatestRelease(body: String): UpdateInfo? {
             val version = versionNameOfTag(tag) ?: return@mapNotNull null
             val pageUrl = release.textField("html_url") ?: return@mapNotNull null
             val notes = release.textField("body").orEmpty()
-            val assetNames = assetNames(release)
+            val apkName = selectMainApkName(assetNames(release))
             UpdateInfo(
                 version = version,
                 versionCode = parseVersionCodeFromNotes(notes)
-                    ?: parseVersionCodeFromAssets(assetNames),
+                    ?: apkName?.let { parseVersionCodeFromAssets(listOf(it)) },
                 notes = notes,
                 pageUrl = pageUrl,
-                apkUrl = apkAssetUrl(release),
+                apkUrl = apkAssetUrl(release, apkName),
                 publishedAt = release.textField("published_at"),
             )
         }
@@ -61,11 +61,10 @@ private fun assetNames(release: JsonObject): List<String> {
     }
 }
 
-private fun apkAssetUrl(release: JsonObject): String? {
+private fun apkAssetUrl(release: JsonObject, apkName: String?): String? {
+    val wanted = apkName ?: return null
     val assets = release["assets"] as? JsonArray ?: return null
     return assets.mapNotNull { it as? JsonObject }
-        .firstOrNull { asset ->
-            asset.textField("name")?.endsWith(".apk", ignoreCase = true) == true
-        }
+        .firstOrNull { asset -> asset.textField("name")?.trim() == wanted }
         ?.textField("browser_download_url")
 }

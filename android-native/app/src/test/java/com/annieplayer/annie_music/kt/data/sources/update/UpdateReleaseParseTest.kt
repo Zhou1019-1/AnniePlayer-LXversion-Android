@@ -118,6 +118,61 @@ class UpdateReleaseParseTest {
     }
 
     @Test
+    fun `同发的 Release 取主程序 apk 而不是排在前面的 WrapperLite`() {
+        val together = """
+            [
+              {
+                "tag_name": "v2.1.0",
+                "html_url": "https://example.com/v2.1.0",
+                "body": "versionCode: 21",
+                "draft": false,
+                "prerelease": false,
+                "assets": [
+                  {
+                    "name": "WrapperLite-1.0.0-vc9.apk",
+                    "browser_download_url": "https://example.com/download/WrapperLite-1.0.0-vc9.apk"
+                  },
+                  {
+                    "name": "AnniePlayer-2.1.0-arm64.apk",
+                    "browser_download_url": "https://example.com/download/AnniePlayer-2.1.0-arm64.apk"
+                  }
+                ]
+              }
+            ]
+        """.trimIndent()
+        val info = parseLatestRelease(together)
+        assertEquals(
+            "https://example.com/download/AnniePlayer-2.1.0-arm64.apk",
+            info?.apkUrl,
+        )
+    }
+
+    @Test
+    fun `只有 WrapperLite 时不给 apk 地址也不借它的 versionCode`() {
+        val wrapperOnly = """
+            [
+              {
+                "tag_name": "v2.2.0",
+                "html_url": "https://example.com/v2.2.0",
+                "body": "",
+                "draft": false,
+                "prerelease": false,
+                "assets": [
+                  {
+                    "name": "WrapperLite-1.0.0-vc9.apk",
+                    "browser_download_url": "https://example.com/download/WrapperLite-1.0.0-vc9.apk"
+                  }
+                ]
+              }
+            ]
+        """.trimIndent()
+        val info = parseLatestRelease(wrapperOnly)
+        assertEquals("2.2.0", info?.version)
+        assertNull(info?.apkUrl)
+        assertNull(info?.versionCode)
+    }
+
+    @Test
     fun `完全没有 versionCode 标记时返回 null 而不是猜`() {
         val none = """
             [
